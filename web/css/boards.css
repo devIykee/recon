@@ -599,7 +599,7 @@
 .sm-chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 14px; border: 1px solid var(--border); background: var(--island-2); color: var(--text); font-size: 12px; cursor: pointer; box-shadow: var(--shadow-island); }
 .sm-chip i { width: 18px; height: 3px; border-radius: 2px; background: var(--c); }
 .sm-chip .n { color: var(--faint); font-size: 11px; }
-.sm-chip[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
+
 .sm-key { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); padding: 0 8px; height: 28px; border-radius: 14px; background: var(--island-2); box-shadow: var(--shadow-island); }
 .sm-key span { width: 14px; height: 10px; border-radius: 3px; display: inline-block; margin-left: 8px; border: 1.5px solid var(--stroke); }
 .sm-key span:first-child { margin-left: 0; }
@@ -765,3 +765,15 @@
 .flow-writes.w-internal { background: var(--island-3); color: var(--muted); }
 .flow-or { font-size: 11px; color: var(--faint); }
 .flow-loc { font: 11px var(--font-mono); color: var(--faint); margin-left: 4px; }
+
+/* the line switches */
+.sm-lines { font-size: 11.5px; font-weight: 650; color: var(--faint); text-transform: uppercase; letter-spacing: .05em; margin-right: 2px; }
+.sm-chip { user-select: none; transition: opacity .12s, background .12s; }
+.sm-chip .sw { position: relative; width: 22px; height: 12px; border-radius: 7px; background: var(--island-3); flex: none; transition: background .15s; }
+.sm-chip .sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); transition: transform .15s, background .15s; }
+.sm-chip[aria-checked="true"] .sw { background: color-mix(in srgb, var(--c) 45%, var(--island-3)); }
+.sm-chip[aria-checked="true"] .sw::after { transform: translateX(10px); background: var(--c); }
+.sm-chip[aria-checked="false"] { opacity: .55; text-decoration: none; }
+.sm-chip[aria-checked="false"] i { background: var(--faint); }
+.sm-chip.sm-all { color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .sm-chip .sw, .sm-chip .sw::after { transition: none; } }

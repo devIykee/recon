@@ -34,7 +34,9 @@ export function createSystemMap() {
   let activeRule = null; // the rule lens: what can change the state this rule is about
   let ruleData = null;
   let ruleSig = '';
-  const hidden = new Set();
+  // kinds of connection switched off; remembered in this browser
+  const hidden = new Set((() => { try { return JSON.parse(localStorage.getItem('recon.sm.hidden') || '[]'); } catch { return []; } })());
+  const saveHidden = () => { try { localStorage.setItem('recon.sm.hidden', JSON.stringify([...hidden])); } catch { /* ignore */ } };
   const cam = { x: 0, y: 0, z: 1 };
   const fitted = new Set();
   let el = null;
@@ -116,18 +118,7 @@ export function createSystemMap() {
       h('button.btn', { on: { click: () => addRelation(t) } }, icon('link'), 'Add connection'),
       h('button.btn.btn-primary', { on: { click: () => bus.newItem('component', { targetId: t.id }) } }, icon('plus'), 'Add part'));
 
-    // the legend doubles as a filter: click a kind of connection to hide it
-    const used = [...new Set(rels.map((r) => r.type))];
-    setChildren(el.querySelector('.sm-filters'),
-      ...used.map((k) => {
-        const m = RELATION[k] || RELATION.other;
-        const n = rels.filter((r) => r.type === k).length;
-        return h('button.sm-chip', {
-          'aria-pressed': String(!hidden.has(k)), style: { '--c': m.color }, 'data-tip': hidden.has(k) ? `Show "${m.label}" arrows` : `Hide "${m.label}" arrows`,
-          on: { click: () => { if (hidden.has(k)) hidden.delete(k); else hidden.add(k); draw(true); } },
-        }, h('i'), m.label, h('span.n', String(n)));
-      }),
-      used.length ? h('span.sm-key', h('span.k-actor'), 'person or role', h('span.k-ext'), 'outside dependency', h('span.k-code'), 'code (dot = review state)') : null);
+    renderFilters(rels);
 
     const linked = new Set(rels.flatMap((r) => [r.from, r.to]));
     const loose = comps.filter((c) => !linked.has(c.id));
@@ -141,6 +132,36 @@ export function createSystemMap() {
     }
     if (showRules || activeRule) refreshRules(false);
     draw(false);
+  }
+
+  // ---------- the lines: switch each kind of connection on and off ----------
+
+  // The legend is the switch: click a kind to turn its lines off or on, double-click
+  // to show only that kind. Parts stay where they are; only the lines change.
+  function renderFilters(rels = list('relation', (r) => r.targetId === targetId)) {
+    const used = [...new Set(rels.map((r) => r.type))];
+    const toggle = (k) => { if (hidden.has(k)) hidden.delete(k); else hidden.add(k); saveHidden(); renderFilters(); draw(true); };
+    const solo = (k) => { hidden.clear(); for (const x of used) if (x !== k) hidden.add(x); saveHidden(); renderFilters(); draw(true); };
+    const all = (on) => { hidden.clear(); if (!on) for (const x of used) hidden.add(x); saveHidden(); renderFilters(); draw(true); };
+    let clickT = null;
+    setChildren(el.querySelector('.sm-filters'),
+      ...(used.length ? [h('span.sm-lines', 'Lines')] : []),
+      ...used.map((k) => {
+        const m = RELATION[k] || RELATION.other;
+        const n = rels.filter((r) => r.type === k).length;
+        const on = !hidden.has(k);
+        return h('button.sm-chip', {
+          type: 'button', role: 'switch', 'aria-checked': String(on), 'aria-pressed': String(on), style: { '--c': m.color },
+          'data-tip': `${on ? 'Hide' : 'Show'} the "${m.label}" lines · double-click to show only these`,
+          on: {
+            // a double-click must not also toggle twice: wait a moment before a single click counts
+            click: () => { clearTimeout(clickT); clickT = setTimeout(() => toggle(k), 220); },
+            dblclick: () => { clearTimeout(clickT); solo(k); },
+          },
+        }, h('span.sw'), h('i'), m.label, h('span.n', String(n)));
+      }),
+      used.length > 1 ? h('button.sm-chip.sm-all', { type: 'button', on: { click: () => all(hidden.size > 0) } }, hidden.size ? 'Show all lines' : 'Hide all lines') : null,
+      used.length ? h('span.sm-key', h('span.k-actor'), 'person or role', h('span.k-ext'), 'outside dependency', h('span.k-code'), 'code (dot = review state)') : null);
   }
 
   // ---------- rules: the lens ----------
@@ -187,8 +208,9 @@ export function createSystemMap() {
       renderSide(comps, rels);
       return;
     }
-    const shown = rels.filter((r) => !hidden.has(r.type));
-    const { pos, edges, W, H } = layout(comps, shown);
+    // lay out with every connection, so switching lines off never moves a part
+    const { pos, edges: allEdges, W, H } = layout(comps, rels);
+    const edges = allEdges.filter((e) => !hidden.has(e.type));
     size = { W, H: H + 56 };
     const top = 56; // room for the column headings
     const focus = picked;
