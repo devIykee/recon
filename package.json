@@ -22,7 +22,7 @@
     "start": "node bin/recon.js serve",
     "dev": "node bin/recon.js serve --open",
     "mcp": "node bin/recon.js mcp",
-    "test": "node --test test/"
+    "test": "node --test test/*.test.js"
   },
   "keywords": [
     "security",
