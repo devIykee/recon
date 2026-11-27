@@ -135,3 +135,10 @@ test('persists atomically and round-trips, with optional encryption', () => {
   const c = new Store({ file });
   assert.throws(() => c.load(), /encrypted/);
 });
+
+test('repeated no-op writes flag an agent as looping', async () => {
+  const { agentHealth } = await import('../src/health.js');
+  const { s, c, agent } = seeded();
+  for (let i = 0; i < 7; i++) s.patch('component', c.id, { notes: 'same' }, agent.id);
+  assert.ok(agentHealth(s.state, s.get('agent', agent.id)).flags.includes('looping'));
+});

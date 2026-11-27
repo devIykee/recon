@@ -23,7 +23,8 @@ export function agentHealth(state, agent, now = Date.now()) {
   if (status === 'offline') flags.push('offline');
 
   const recent = state.activity.filter((a) => a.by === agent.id).slice(-10);
-  if (recent.length >= 8 && new Set(recent.map((a) => a.summary)).size <= 2) flags.push('looping');
+  const noops = (agent.noops || []).filter((t) => now - t < 120_000).length;
+  if (noops >= 6 || (recent.length >= 8 && new Set(recent.map((a) => a.summary)).size <= 2)) flags.push('looping');
 
   const hyps = Object.values(state.items.hypothesis).filter((h) => h.createdBy === agent.id);
   if (hyps.length >= 4) {
