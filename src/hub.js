@@ -18,7 +18,8 @@ import { DemoAgent } from './demo.js';
 import { Engagements } from './engagements.js';
 import { mustDo, pulse, beforeYouStop, whereWeLeftOff } from './proactive.js';
 import { cardGaps, severityProblem, evidenceGaps, duplicateOf, reportedMatch } from './quality.js';
-import { buildReport } from './report.js';
+import { buildReport, reportBrief, checkSubmission } from './report.js';
+import { Skills, SkillError } from './skills.js';
 import { playbookFor } from './knowledge.js';
 import { watchSource } from './dropin.js';
 import { loadConfig, ROOT } from './config.js';
@@ -49,6 +50,7 @@ class Tenant {
       cfg.log(`recon: could not open the engagements in ${dir}: ${err.message}`);
       throw err;
     }
+    this.skills = new Skills(dir);
     this.demo = new DemoAgent(this.store, { log: cfg.log });
     this.watchers = [];
     this.lastHealth = '';
@@ -284,6 +286,7 @@ export function createHub(overrides = {}) {
       next: todo.length ? `${todo[0].do} (${todo[0].how})` : b.next,
       beforeYouStop: beforeYouStop(t.store.state, id),
       whereWeLeftOff: whereWeLeftOff(t.store.state, id),
+      skills: t.skills.list().map((s) => ({ id: s.id, name: s.name, description: s.description, use: s.use })),
     };
   });
 
@@ -295,9 +298,10 @@ export function createHub(overrides = {}) {
     const cur = t.store.state.project.report || {};
     const patch = {};
     if (who === 'human') {
-      for (const k of ['shape', 'path', 'includeIds']) if (body?.[k] !== undefined) patch[k] = body[k];
+      for (const k of ['shape', 'path', 'includeIds', 'skill', 'signOff']) if (body?.[k] !== undefined) patch[k] = body[k];
+      if (patch.skill && !t.skills.get(patch.skill)) throw new HttpError(400, `no skill "${patch.skill}"`);
     } else {
-      if (body?.shape !== undefined || body?.includeIds !== undefined) throw new HttpError(403, 'the report shape and which findings go in are the human\'s call: ask with recon_propose and options');
+      if (['shape', 'includeIds', 'skill', 'signOff'].some((k) => body?.[k] !== undefined)) throw new HttpError(403, 'the report shape, which findings go in, the writing skill and whose name signs it are the human\'s call: ask with recon_propose and options');
       if (body?.path !== undefined && cur.path) throw new HttpError(403, `the report already has a path (${cur.path}); ask the human to change it`);
       if (body?.path !== undefined) patch.path = body.path;
     }
@@ -307,13 +311,68 @@ export function createHub(overrides = {}) {
     return buildReport(t.store.state);
   });
 
-  route('POST', '/api/report/write', ({ t, who }) => {
-    const cfg = t.store.state.project.report || {};
-    if (!cfg.shape) throw new HttpError(409, 'the human has not chosen the report shape yet. Ask with recon_propose and options ["combined: one document, a section per finding", "separate: one report per finding"], then write.');
+  const needShape = (t) => {
+    if (!(t.store.state.project.report || {}).shape) throw new HttpError(409, 'the human has not chosen the report shape yet. Ask with recon_propose and options ["combined: one document, a section per finding", "separate: one report per finding"], then write.');
+  };
+
+  // Everything the writer needs: the report skill as the system prompt, and the facts.
+  route('GET', '/api/report/brief', ({ t }) => {
+    needShape(t);
     const r = buildReport(t.store.state);
-    t.store.setProject({ report: { last: { at: Date.now(), by: who, shape: r.shape, files: r.files.map((f) => f.name), included: r.included.map((f) => f.id) } } }, who);
-    t.store.log({ by: who, action: 'note', kind: 'project', summary: `wrote the ${r.shape} report: ${r.included.length} finding(s), ${r.excluded.length} left out` });
-    return r;
+    if (!r.included.length) throw new HttpError(409, `no finding passes every check yet, so there is nothing to report. Left out: ${r.excluded.map((x) => `${x.title} (${x.reasons.join('; ')})`).join(' | ') || 'none'}`);
+    return reportBrief(t.store.state, t.skills.reportSkill(t.store.state.project.report?.skill));
+  });
+  route('POST', '/api/report/write', ({ t }) => {
+    needShape(t);
+    return reportBrief(t.store.state, t.skills.reportSkill(t.store.state.project.report?.skill));
+  });
+
+  route('POST', '/api/report/submit', ({ t, who, body }) => {
+    needShape(t);
+    const st = t.store.state;
+    const { docs, problems } = checkSubmission(st, body?.documents);
+    if (problems.length) {
+      const err = new HttpError(422, `the report does not follow the writing skill yet (${problems.length} problem${problems.length === 1 ? '' : 's'}); fix and resubmit`);
+      err.details = problems;
+      throw err;
+    }
+    const skill = t.skills.reportSkill(st.project.report?.skill);
+    const at = Date.now();
+    const keep = (st.project.report?.documents || []).filter((d) => !docs.some((n) => n.key === d.key && n.shape === d.shape));
+    const stored = docs.map((d) => ({ ...d, at, by: who, skill: skill.id }));
+    t.store.setProject({ report: { documents: [...keep, ...stored], last: { at, by: who, shape: docs[0].shape, files: stored.map((d) => d.name), included: stored.flatMap((d) => d.findingIds) } } }, who);
+    t.store.log({ by: who, action: 'note', kind: 'project', summary: `wrote ${stored.map((d) => d.name).join(', ')} following "${skill.name}"` });
+    const r = buildReport(t.store.state);
+    return { ...r, written: stored.map((d) => d.name) };
+  });
+
+  // ---------- skills: kept per machine, shared by every hunt ----------
+
+  const skillErr = (fn) => { try { return fn(); } catch (err) { if (err instanceof SkillError) throw new HttpError(err.status, err.message); throw err; } };
+  const humanOnly = (who, what) => { if (who !== 'human') throw new HttpError(403, `${what} is the human's call; suggest it with recon_propose`); };
+  route('GET', '/api/skills', ({ t }) => ({ skills: t.skills.list(), reportSkill: t.skills.reportSkill(t.store.state.project.report?.skill).id }));
+  route('GET', '/api/skills/:id', ({ t, params }) => {
+    const s = t.skills.get(decodeURIComponent(params.id));
+    if (!s) throw new HttpError(404, `no skill "${params.id}"`);
+    return s;
+  });
+  route('POST', '/api/skills', ({ t, who, body }) => {
+    humanOnly(who, 'adding a skill');
+    const s = skillErr(() => t.skills.save(typeof body?.text === 'string' && !body.body ? body.text : body || {}));
+    t.store.log({ by: who, action: 'created', kind: 'project', summary: `added the skill "${s.name}"` });
+    return s;
+  });
+  route('PUT', '/api/skills/:id', ({ t, who, body, params }) => {
+    humanOnly(who, 'editing a skill');
+    const cur = t.skills.get(params.id);
+    if (!cur) throw new HttpError(404, `no skill "${params.id}"`);
+    const s = skillErr(() => t.skills.save({ ...cur, ...body }, { id: cur.id }));
+    t.store.log({ by: who, action: 'updated', kind: 'project', summary: `edited the skill "${s.name}"` });
+    return s;
+  });
+  route('DELETE', '/api/skills/:id', ({ t, who, params }) => {
+    humanOnly(who, 'removing a skill');
+    return skillErr(() => t.skills.remove(params.id));
   });
 
   route('GET', '/api/targets/:id/playbook', ({ t, params }) => {

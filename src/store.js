@@ -467,6 +467,9 @@ export class Store extends EventEmitter {
       if (['combined', 'separate', ''].includes(fields.report.shape)) r.shape = fields.report.shape;
       if (typeof fields.report.path === 'string') r.path = fields.report.path.slice(0, 500);
       if (Array.isArray(fields.report.includeIds)) r.includeIds = fields.report.includeIds.map(String).slice(0, 200);
+      if (typeof fields.report.skill === 'string') r.skill = fields.report.skill.slice(0, 80);
+      if (typeof fields.report.signOff === 'string') r.signOff = fields.report.signOff.trim().slice(0, 120);
+      if (Array.isArray(fields.report.documents)) r.documents = fields.report.documents.slice(0, 100);
       if (fields.report.last) r.last = fields.report.last;
       p.report = r;
     }

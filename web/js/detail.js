@@ -313,7 +313,8 @@ export function createDetail(item, { onClose, inMap = false } = {}) {
     };
     setChildren(secs.text,
       ...block(field, TEXT_LABEL[field], field === 'reasoning' ? 'No reasoning attached yet. Unbacked claims are hard to trust.' : 'Nothing written yet.'),
-      ...(extra ? [h('div', { style: { height: '12px' } }), ...block('repro', 'Reproduction', 'No reproduction yet. A finding without a repro is easy to dismiss.')] : []));
+      ...(extra ? [h('div', { style: { height: '12px' } }), ...block('repro', 'Reproduction', 'No reproduction yet. A finding without a repro is easy to dismiss.'),
+        h('div', { style: { height: '12px' } }), ...block('fix', 'Suggested fix', 'No fix yet. The report needs one an engineer could implement from the description.')] : []));
     void value;
   }
 

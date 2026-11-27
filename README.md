@@ -97,6 +97,19 @@ the way.
 
 ![The swarm board](docs/img/swarm.jpg)
 
+**Your skills, and reports written your way.** Keep reusable instructions for
+your agents under Skills (K): how you audit a kind of protocol, house rules,
+and how you want disclosures written. They are stored once per machine as
+Claude-style `SKILL.md` folders in `~/.recon/data/skills`, so you can import a
+Claude skill as it is, and every agent sees them in its briefing and as MCP
+prompts. The built-in *Disclosure report* skill is the system prompt the agent
+writes reports with: plain prose for engineers and non-technical readers
+alike, honest severity in the opening sentences, every claim paired with its
+limits, what was checked and held, what was not reviewed, a concrete fix, and
+your name at the end. The agent gets the facts from the board, writes, and
+submits; markdown, a missing severity or a missing signature is sent back to
+fix. You pick one combined document or one per finding.
+
 **Live everywhere.** Every change from any agent, the API, or another tab
 appears immediately, attributed and animated, in an activity feed you can filter
 by author. Nothing needs a refresh.
@@ -107,7 +120,7 @@ by author. Nothing needs a refresh.
 
 | | |
 | --- | --- |
-| **MCP** | `recon mcp --name my-agent`: 16 tools (briefing, coverage, hypotheses, findings, steers, proposals…). Starts a local hub if none is running. |
+| **MCP** | `recon mcp --name my-agent`: 26 tools (briefing, scan and map, coverage, hypotheses, findings, steers, proposals, skills, the report…) and your skills as prompts. Starts a local hub if none is running. |
 | **CLI** | `RECON_AGENT=my-agent recon briefing`, `recon coverage "Vault.withdraw()" reviewed --evidence "Vault.sol:120"`… |
 | **HTTP + WebSocket** | REST writes with `X-Recon-Agent: my-agent`; a socket at `/ws` streams every change. |
 | **Drop-in JSON** | `recon serve --watch inbox.json`: your agent writes a file and recon merges it item by item. |

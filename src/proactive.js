@@ -69,7 +69,13 @@ export function mustDo(state, agentId, now = Date.now()) {
   const reportable = Object.values(items.finding).filter((f) => !cardGaps(f).length);
   const lastFindingChange = Math.max(0, ...Object.values(items.finding).map((f) => f.updatedAt));
   if (reportable.length && report.shape && (!report.last || report.last.at < lastFindingChange)) {
-    add('report', null, `findings changed since the report was last written: rewrite the ${report.shape} report${report.path ? ` at ${report.path}` : ''}`, 'recon_write_report');
+    add('report', null, `findings changed since the report was last written: rewrite the ${report.shape} report${report.path ? ` at ${report.path}` : ''}`, 'recon_write_report, write it, then recon_submit_report');
+  }
+  if (reportable.length && report.shape && !report.signOff) {
+    add('report', null, 'ask the human whose name signs the report before you write it', 'recon_propose with options, e.g. ["Sign as <their name>", "Sign as <team name>"]');
+  }
+  for (const f of reportable) {
+    if (!f.fix && (mine(f) || !f.createdBy?.startsWith('ag_'))) add('card', f, `"${short(f.title, 60)}" has no suggested fix: write one an engineer could implement from the description`, 'recon_update fix="..."');
   }
   if (reportable.length && !report.shape) {
     add('report', null, `${reportable.length} finding(s) are ready: ask the human how they want the report (one combined document, or one per finding) and where to write it, instead of drafting in chat`, 'recon_propose with options ["combined", "separate"]');

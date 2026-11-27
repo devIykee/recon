@@ -227,7 +227,7 @@ export const TOOLS = [
         title: str('One line'), severity: en('severity', 'critical | high | medium | low | info'),
         targetId: str('Target id'), componentId: str('Component id'), hypothesisId: str('Source hypothesis id'),
         bugClass: str('e.g. "rounding"'), stage: en('findingStage', 'Usually "testing" until reproduced'),
-        notes: str('Impact and root cause'), repro: str('Steps or test that reproduces it'), evidence: evidenceSchema,
+        notes: str('Impact and root cause'), repro: str('Steps or test that reproduces it'), fix: str('A concrete fix an engineer could implement from this description'), evidence: evidenceSchema,
         attacker: en('attacker', 'Who can do it: stranger, holder, privileged, admin'),
         reachability: en('reachability', 'permissionless, needs-role, needs-config (a setting the team chose), needs-social'),
         bound: str('One sentence on what still cannot happen'),
@@ -366,27 +366,54 @@ export const TOOLS = [
   },
   {
     name: 'recon_write_report',
-    description: 'Write the disclosure report the way the human chose (combined: one document with a section per finding; separate: one report per finding). Only findings that pass every gate are included; the rest are listed with the reason. Refused until the human has chosen the shape: ask with recon_propose and options first. Never draft reports in chat.',
-    inputSchema: { type: 'object', properties: { path: str('Where to write, if the human has not set it (a folder for separate, a file for combined)') } },
-    run: async (c, a, ctx = {}) => {
-      if (a.path) { try { await c.setReport({ path: a.path }); } catch { /* path already set by the human */ } }
-      const r = await c.writeReport();
-      const where = r.config.path || a.path;
-      const summary = { shape: r.shape, included: r.included, excluded: r.excluded };
-      if (!ctx.canWriteFiles || !where) return { ...summary, files: r.files, note: where ? 'This connection cannot write files: save the files yourself.' : 'No path set: save these files where the human wants them, or ask for a path.' };
-      const base = path.resolve(ctx.cwd || process.cwd(), where);
-      const written = [];
-      if (r.shape === 'separate' || r.files.length > 1) {
-        fs.mkdirSync(base, { recursive: true });
-        for (const f of r.files) { const p = path.join(base, f.name); fs.writeFileSync(p, f.body); written.push(p); }
-      } else {
-        const target = /\.md$/i.test(base) ? base : path.join(base, r.files[0].name);
-        fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.writeFileSync(target, r.files[0].body);
-        written.push(target);
-      }
-      return { ...summary, written };
+    description: 'Start writing the disclosure report. Returns the human\'s report-writing skill (use its systemPrompt as your instructions for this writing), the facts from the board it asks for (findings with their card, evidence and suggested fix, what was checked and held, what was not reviewed, scope, disclosure channel, bounty rules, whose name signs it) and which documents are due. Write the prose yourself, then call recon_submit_report. Refused until the human has chosen combined or separate: ask with recon_propose and options first. Never draft reports in chat.',
+    inputSchema: { type: 'object', properties: {} },
+    run: (c) => c.reportBrief(),
+  },
+  {
+    name: 'recon_submit_report',
+    description: 'Submit the report you wrote from recon_write_report. One document for a combined report, one per finding for separate. Plain prose (no markdown symbols), severity in the opening sentences, signed by name; for form-based channels (GitHub security advisory) send fields instead of body. Refused with the exact problems if it does not follow the skill: fix them and resubmit. Saved on the board and, when a report path is set, written there as .txt files.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        documents: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              findingIds: { type: 'array', items: { type: 'string' }, description: 'The findings this document covers (from the brief)' },
+              body: str('The report, plain prose'),
+              fields: { type: 'array', items: { type: 'object', properties: { label: str('e.g. Title, Summary, Details, Proof of Concept, Impact, Affected products, Severity, CWE'), value: str() }, required: ['label', 'value'] }, description: 'Instead of body, for channels that use form fields' },
+            },
+            required: ['findingIds'],
+          },
+        },
+      },
+      required: ['documents'],
     },
+    run: async (c, a, ctx = {}) => {
+      const r = await c.submitReport(a.documents);
+      const where = r.config.path;
+      const summary = { written: r.written, stillMissing: r.missing, stale: r.stale };
+      if (!ctx.canWriteFiles || !where) return { ...summary, note: where ? 'Saved on the board. This connection cannot write files; the human can download them from the Report window.' : 'Saved on the board. No report path is set; the human can download it from the Report window.' };
+      const base = path.resolve(ctx.cwd || process.cwd(), where);
+      const files = [];
+      const docs = r.documents.filter((d) => r.written.includes(d.name));
+      const single = docs.length === 1 && r.shape === 'combined' && /\.(txt|md)$/i.test(base);
+      for (const d of docs) {
+        const target = single ? base : path.join(base, d.name);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, `${d.body}\n`);
+        files.push(target);
+      }
+      return { ...summary, files };
+    },
+  },
+  {
+    name: 'recon_skill',
+    description: 'The human\'s skills: reusable instructions they keep for agents (how they want reports written, how they audit a protocol type, house rules). Without a name, lists them; with a name, returns the instructions to follow. The briefing lists them too.',
+    inputSchema: { type: 'object', properties: { name: str('Skill id or name') } },
+    run: async (c, a) => (a.name ? c.skill(a.name) : (await c.skills()).skills.map(({ id, name, description, use }) => ({ id, name, description, use }))),
   },
   {
     name: 'recon_playbook',
@@ -402,6 +429,7 @@ const INSTRUCTIONS = `recon: a shared board where you and a human research vulne
 3. Work each target in order: map it (recon_scan, then recon_map for what the scan cannot see), record the developers' assumptions, then hunt.
 4. Every claim needs evidence. Findings need a complete confirmation card and earned severity.
 5. Never leave loose ends in chat: record open threads with recon_add_lead and choices with recon_propose options.
+6. The human keeps skills (recon_skill): follow the ones that fit. Reports are written with recon_write_report, which hands you their report skill as your instructions.
 Never set verification or priority; those belong to the human.`;
 
 function compact(it) {
@@ -444,7 +472,7 @@ export async function dispatch(msg, { getClient, onInitialize, ctx = {} } = {}) 
         onInitialize?.(params);
         return ok({
           protocolVersion: PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
-          capabilities: { tools: { listChanged: false } },
+          capabilities: { tools: { listChanged: false }, prompts: { listChanged: false } },
           serverInfo: { name: 'recon', version: '0.1.0' },
           instructions: INSTRUCTIONS,
         });
@@ -454,6 +482,15 @@ export async function dispatch(msg, { getClient, onInitialize, ctx = {} } = {}) 
         return null;
       case 'ping':
         return ok({});
+      // The human's skills, offered as prompts the client can show (e.g. as slash commands).
+      case 'prompts/list': {
+        const { skills } = await (await getClient()).skills();
+        return ok({ prompts: skills.map((x) => ({ name: x.id, title: x.name, description: x.description })) });
+      }
+      case 'prompts/get': {
+        const x = await (await getClient()).skill(params?.name);
+        return ok({ description: x.description, messages: [{ role: 'user', content: { type: 'text', text: x.body } }] });
+      }
       case 'tools/list':
         return ok({ tools: TOOLS.map(({ name: n, description, inputSchema }) => ({ name: n, description, inputSchema })) });
       case 'tools/call': {

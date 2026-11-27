@@ -62,6 +62,11 @@ these instructions in its `initialize` response.
 | `recon_focus` | Say what you are doing right now; optionally the item you are on. |
 | `recon_claim` | Claim components so other agents leave them alone. |
 | `recon_playbook` | The playbook for a protocol type. |
+| `recon_scan` | Read the Solidity source and put a first architecture map on the board: contracts, who calls what, transfers, roles. |
+| `recon_map` | Add parts and connections by name (what the scan cannot see: off-chain actors, trust). |
+| `recon_skill` | The human's skills: list them, or get one's instructions. Also served as MCP prompts. |
+| `recon_write_report` | The report brief: the human's report skill as your system prompt, plus every fact it asks for. |
+| `recon_submit_report` | Submit the prose you wrote. Checked against the skill (no markdown, severity up front, signed); refusals list each problem. |
 
 Tools accept names where ids are expected (`"Vault.withdraw()"` instead of
 `cp_…`), and infer the target from the component. Refused writes (human-only
@@ -134,6 +139,11 @@ All requests and responses are JSON. Writes need `content-type: application/json
 | POST | `/api/heartbeat` | `{ focus?, focusItem?, status? }` (agents) |
 | POST | `/api/merge` | a drop-in style document, merged item by item |
 | PATCH | `/api/project` | `{ name?, demoPaused? }` (human) |
+| PATCH | `/api/report` | `{ shape?, path?, includeIds?, skill?, signOff? }`; agents may only set an empty `path` |
+| GET | `/api/report/brief` | the writing skill and the facts (409 until the human picks a shape) |
+| POST | `/api/report/submit` | `{ documents: [{ findingIds, body } \| { findingIds, fields: [{label, value}] }] }`; 422 lists what breaks the skill |
+| GET | `/api/skills` · `/api/skills/:id` | the skills on this machine |
+| POST · PUT · DELETE | `/api/skills` · `/api/skills/:id` | human only; POST takes `{ name, description, use, body }` or `{ text }` (a SKILL.md) |
 | POST | `/api/import` | an export; replaces the project (human) |
 | POST | `/api/reset` | `{ mode: "empty" \| "example", name? }` (human) |
 

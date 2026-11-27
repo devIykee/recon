@@ -510,6 +510,25 @@
 .report-grid { display: grid; grid-template-columns: 300px 1fr; gap: 16px; align-items: start; }
 .report-preview { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; max-height: 58vh; overflow: auto; font: 12px/1.55 var(--font-mono); white-space: pre-wrap; word-break: break-word; }
 .report-files { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.report-prose { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 18px 22px; max-height: 60vh; overflow: auto; font-size: 14px; line-height: 1.65; color: var(--text); }
+.report-prose p { margin: 0 0 12px; white-space: pre-wrap; word-break: break-word; max-width: 72ch; }
+.report-prose.empty-prose { color: var(--muted); font-size: 13px; }
+.report-prose.empty-prose b { color: var(--text); }
+.report-field + .report-field { margin-top: 10px; padding-top: 12px; border-top: 1px dashed var(--border); }
+.report-files .filter .pill { margin-left: 6px; font-size: 10.5px; padding: 1px 6px; }
+.pill-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.row-gap { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.row-gap > .input { flex: 1; min-width: 0; }
+.row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.skills-grid { display: grid; grid-template-columns: 280px 1fr; gap: 16px; align-items: start; }
+.skill-list { display: flex; flex-direction: column; gap: 6px; max-height: 64vh; overflow: auto; }
+.skill-item { all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-direction: column; gap: 3px; padding: 9px 11px; border-radius: 9px; background: var(--island-2); border: 1.5px solid transparent; }
+.skill-item:hover { border-color: var(--border); }
+.skill-item.on { border-color: var(--primary); background: var(--primary-ghost); }
+.skill-item b { font-weight: 600; font-size: 13px; display: flex; align-items: center; }
+.skill-item small { color: var(--muted); font-size: 11.5px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.skill-body { min-height: 300px; font-size: 12.5px; line-height: 1.55; }
+@media (max-width: 800px) { .skills-grid, .row-2 { grid-template-columns: 1fr; } }
 .excluded { font-size: 12px; color: var(--muted); }
 .excluded li { margin-bottom: 4px; }
 

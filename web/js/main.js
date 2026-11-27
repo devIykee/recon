@@ -11,7 +11,7 @@ import { openConnect } from './connect.js';
 import { bus, loadGlossary } from './bus.js';
 import { isTyping } from './canvas.js';
 import { avatar } from './steer.js';
-import { openReport, openEngagements } from './panels.js';
+import { openReport, openEngagements, openSkills } from './panels.js';
 
 const app = document.getElementById('app');
 const $ = (id) => document.getElementById(id);
@@ -229,6 +229,7 @@ function openMenu(anchor) {
     '-',
     { text: 'Hunts…', icon: 'clock', shortcut: 'E', action: openEngagements },
     { text: 'Report…', icon: 'file', shortcut: 'R', action: openReport },
+    { text: 'Skills…', icon: 'book', shortcut: 'K', action: () => openSkills() },
     { text: 'Connect an agent', icon: 'plug', shortcut: 'C', action: () => openConnect() },
     { text: 'Export project (JSON)', icon: 'download', action: exportProject },
     { text: 'Import project…', icon: 'upload', action: importProject },
@@ -290,6 +291,7 @@ async function openHelp() {
         h('kbd', 'C'), h('span', 'Connect an agent'),
         h('kbd', 'E'), h('span', 'Hunts: one per project, saved, with snapshots'),
         h('kbd', 'R'), h('span', 'The report'),
+        h('kbd', 'K'), h('span', 'Skills: your instructions for agents'),
         h('kbd', 'N'), h('span', 'Add something'),
         h('kbd', 'Esc'), h('span', 'Close'))),
       h('div', h('div.sec-label', 'Colors'), h('div.kbd-grid',
@@ -355,6 +357,7 @@ Object.assign(bus, {
   connect: () => openConnect(),
   sidebar: (tab) => { setSidebar(true); sidebar.select(tab); },
   report: () => openReport(),
+  skills: () => openSkills(),
   engagements: () => openEngagements(),
   focusAgent: (id) => map.focusAgent(id),
 });
@@ -507,6 +510,7 @@ addEventListener('keydown', (e) => {
     case 'c': case 'C': openConnect(); break;
     case 'e': case 'E': openEngagements(); break;
     case 'r': case 'R': openReport(); break;
+    case 'k': case 'K': openSkills(); break;
     case 'n': case 'N': newMenu($('menu-btn')); break;
     case '?': openHelp(); break;
     default:

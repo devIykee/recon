@@ -170,6 +170,8 @@ export const SCHEMA = {
     testResult: en('testResult', A),
     productionTouched: bool(),
     productionNote: str(),
+    // a concrete change an engineer could implement from the description
+    fix: str(),
   },
   // Several weaker issues that combine into a stronger one.
   chain: {

@@ -49,8 +49,12 @@ write (as the human, or as an agent with --as NAME)
   recon add chain <title> --part <id> --part <id> --glue same-tx|same-caller|config+code|social+code
                     --result "..." [--severity S] [--permissionless]
   recon ready <finding>                 re-run every gate: card, evidence, severity, test, duplicates
-  recon report [--shape combined|separate] [--path P] [--include id,id] [--write]
-                                        the disclosure report: only findings that pass every gate
+  recon report [--shape combined|separate] [--path P] [--include id,id] [--skill S] [--sign-off NAME]
+                                        the report slot: what goes in, what is left out, what is written
+  recon report brief                    the writing skill (your system prompt) and the facts to write from
+  recon report submit <file> [--finding id]  submit what you wrote: plain prose, checked against the skill
+  recon report show                     print what has been written
+  recon skills [name]                   the human's skills; recon skills add <SKILL.md|folder>, rm <name>
   recon propose <text> [--option "A" --option "B"] [--rationale ...]
       any add takes --evidence "ref" or --evidence "ref|what it shows" (repeatable)
   recon coverage <component> <untouched|scanning|reviewed|flagged> [--reasoning ...] [--evidence ...]
@@ -355,7 +359,7 @@ async function add() {
         bounty: flags.bounty !== undefined ? Number(flags.bounty) : undefined, notes: flags.notes, repro: flags.repro,
         attacker: flags.attacker, reachability: flags.reachability, bound: flags.bound, liveFunds: flags.funds,
         liveFundsMethod: flags['funds-method'], alreadyReported: flags.reported, alreadyReportedRef: flags['reported-ref'],
-        verificationMethod: flags.verified, testName: flags.test, testResult: flags['test-result'],
+        verificationMethod: flags.verified, testName: flags.test, testResult: flags['test-result'], fix: flags.fix,
       };
       break;
     default:
@@ -588,27 +592,84 @@ async function start() {
 
 async function report() {
   const api = client();
+  const sub = pos[0];
+  if (sub === 'brief') {
+    const b = await api.reportBrief();
+    out(b, () => [
+      bold(`SYSTEM PROMPT (skill: ${b.skill.name})`), '', b.skill.systemPrompt, '',
+      bold('WHAT TO DO'), ...b.instructions.map((x) => `  ${x}`), '',
+      bold('DUE'), ...b.write.map((d) => `  ${d.name}  ${dim(d.findingIds.join(','))}${d.written ? dim(d.stale ? '  (written, out of date)' : '  (written)') : ''}`), '',
+      bold('FACTS'), JSON.stringify(b.facts, null, 2), '',
+      dim(`then: recon report submit <file>${b.shape === 'separate' ? ' --finding <id>   (one per finding)' : ''}`),
+    ].join('\n'));
+    return;
+  }
+  if (sub === 'submit') {
+    const files = pos.slice(1);
+    if (!files.length) throw new ReconError(2, 'usage: recon report submit <file> [<file> ...] [--finding id,id]');
+    const ids = flags.finding ? String(flags.finding).split(',').map((x) => x.trim()).filter(Boolean) : [];
+    const documents = files.map((f, i) => {
+      const text = fs.readFileSync(path.resolve(f), 'utf8');
+      if (/\.json$/i.test(f)) { const j = JSON.parse(text); return Array.isArray(j) ? j : j.documents || [j]; }
+      const findingIds = files.length === 1 ? ids : ids[i] ? [ids[i]] : [];
+      return [{ findingIds, body: text }];
+    }).flat();
+    let r;
+    try { r = await api.submitReport(documents); } catch (err) {
+      if (err.details) throw new ReconError(err.status === 422 ? 1 : 2, `${err.message}\n${[].concat(err.details).map((x) => `  - ${x}`).join('\n')}`);
+      throw err;
+    }
+    out(r, () => [`saved ${r.written.join(', ')}`, ...(r.missing.length ? [`still due: ${r.missing.join(', ')}`] : [])].join('\n'));
+    return;
+  }
+  if (sub === 'show') {
+    const r = await api.report();
+    const docs = r.documents.filter((d) => d.written);
+    out(docs, () => (docs.length ? docs.map((d) => `${bold(d.name)}${d.stale ? COLORS.flagged('  out of date') : ''}\n\n${d.body}`).join('\n\n\n') : 'nothing written yet'));
+    return;
+  }
   const cfg = {};
   if (flags.shape) cfg.shape = flags.shape;
   if (typeof flags.path === 'string') cfg.path = flags.path;
   if (flags.include) cfg.includeIds = String(flags.include).split(',').map((x) => x.trim()).filter(Boolean);
-  let r = Object.keys(cfg).length ? await api.setReport(cfg) : await api.report();
-  if (flags.write) {
-    r = await api.writeReport();
-    const where = r.config.path;
-    if (!where) throw new ReconError(2, 'no report path: pass --path <file or folder>');
-    const base = path.resolve(where);
-    const written = [];
-    if (r.files.length > 1) { fs.mkdirSync(base, { recursive: true }); for (const f of r.files) { fs.writeFileSync(path.join(base, f.name), f.body); written.push(path.join(base, f.name)); } }
-    else { const target = /\.md$/i.test(base) ? base : path.join(base, r.files[0].name); fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, r.files[0].body); written.push(target); }
-    r.written = written;
-  }
+  if (typeof flags.skill === 'string') cfg.skill = flags.skill;
+  if (typeof flags['sign-off'] === 'string') cfg.signOff = flags['sign-off'];
+  const r = Object.keys(cfg).length ? await api.setReport(cfg) : await api.report();
   out(r, () => [
-    `${bold('report')}  shape ${r.config.shape || COLORS.flagged('not chosen')}  path ${r.config.path || dim('not set')}`,
+    `${bold('report')}  shape ${r.config.shape || COLORS.flagged('not chosen')}  path ${r.config.path || dim('not set')}  skill ${r.config.skill || 'disclosure-report'}  signed ${r.config.signOff || COLORS.flagged('no name yet')}`,
     '', bold(`included (${r.included.length})`), ...r.included.map((f) => `  ${tint(f.severity).padEnd(tty ? 18 : 9)} ${f.title}`),
     '', bold(`left out (${r.excluded.length})`), ...r.excluded.map((f) => `  ${f.title}\n    ${dim(f.reasons.join('; '))}`),
-    ...(r.written ? ['', ...r.written.map((p) => `wrote ${p}`)] : []),
+    '', bold('documents'), ...(r.documents.length ? r.documents.map((d) => `  ${d.name}  ${d.written ? (d.stale ? COLORS.flagged('out of date') : COLORS.reviewed('written')) : dim('not written')}`) : [dim('  none due yet')]),
   ].join('\n'));
+}
+
+async function skills() {
+  const api = client();
+  const sub = pos[0];
+  if (sub === 'add' || sub === 'import') {
+    const src = path.resolve(need(pos[1], 'a SKILL.md file or a folder of skills'));
+    const found = [];
+    const walk = (p, depth = 0) => {
+      const st = fs.statSync(p);
+      if (st.isFile() && /\.md$/i.test(p)) found.push(p);
+      else if (st.isDirectory() && depth < 2) for (const e of fs.readdirSync(p)) if (!e.startsWith('.')) { const q = path.join(p, e); if (fs.statSync(q).isDirectory() || /^skill\.md$/i.test(e) || depth === 0) walk(q, depth + 1); }
+    };
+    walk(src);
+    if (!found.length) throw new ReconError(2, `no .md files under ${src}`);
+    const added = [];
+    for (const f of found) {
+      const dirName = /^skill\.md$/i.test(path.basename(f)) ? path.basename(path.dirname(f)) : path.basename(f, '.md');
+      const text = fs.readFileSync(f, 'utf8');
+      const s = await api.addSkill({ text, name: /^---[\s\S]*?\bname:/m.test(text) ? undefined : dirName });
+      added.push(s);
+    }
+    out(added, () => added.map((s) => `added ${bold(s.name)} ${dim(`(${s.id}, ${s.use})`)}`).join('\n'));
+    return;
+  }
+  if (sub === 'rm' || sub === 'remove') { const r = await api.removeSkill(need(pos[1], 'skill')); out(r, () => (r.restoredDefault ? `restored the original "${r.removed}"` : `removed "${r.removed}"`)); return; }
+  if (sub === 'show' || (sub && sub !== 'list')) { const s = await api.skill(sub === 'show' ? need(pos[1], 'skill') : sub); out(s, () => `${bold(s.name)} ${dim(`(${s.id}, ${s.use})`)}\n${dim(s.description)}\n\n${s.body}`); return; }
+  const r = await api.skills();
+  out(r, () => r.skills.map((s) => `${bold(s.name)} ${dim(s.id)}${s.use === 'report' ? (s.id === r.reportSkill ? COLORS.reviewed('  writes the report') : dim('  report skill')) : ''}${s.edited ? dim('  (edited)') : ''}\n  ${s.description}`).join('\n'));
 }
 
 async function ready() {
@@ -680,7 +741,7 @@ const COMMANDS = {
   steers, ack: () => steerVerb('ack'), address: () => steerVerb('address'), steer,
   verify: () => verdict('verified'), dispute: () => verdict('disputed'), unverify: () => verdict('unverified'),
   accept: () => decide('accept'), decline: () => decide('decline'),
-  setup, agent: agentCmd, start, scan, relate, phase, ready, report, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
+  setup, agent: agentCmd, start, scan, relate, phase, ready, report, skills, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
 };
 
 async function main() {
