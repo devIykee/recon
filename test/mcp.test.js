@@ -73,22 +73,28 @@ test('agent works the board through tools, by name', async () => {
   assert.equal(agent.focusItem, cov.data.id);
 });
 
-test('starting an engagement never deletes one, and starting by name resumes it', async () => {
+test('starting a hunt never deletes one, never yanks a busy board, and resumes by name', async () => {
+  const rpc = session(`http://127.0.0.1:${hub.port}`); // its own session: starting a hunt re-points the session
   const eng = hub.tenant().engagements;
   const exampleId = hub.tenant().store.state.project.id;
   const r = await rpc.tool('recon_start_engagement', { name: 'Real audit' });
   assert.equal(r.isError, false);
+  assert.equal(r.data.onScreen, true, 'the example gives way to a real hunt');
   assert.equal(hub.tenant().store.state.project.name, 'Real audit');
   const realId = hub.tenant().store.state.project.id;
-  await rpc.tool('recon_start_engagement', { name: 'Another audit' });
-  assert.equal(hub.tenant().store.state.project.name, 'Another audit');
+  const other = await rpc.tool('recon_start_engagement', { name: 'Another audit' });
+  assert.equal(other.data.onScreen, false, 'a busy real hunt stays on screen');
+  assert.equal(hub.tenant().store.state.project.name, 'Real audit');
+  const side = eng.storeFor('another audit');
+  assert.equal(side.state.project.name, 'Another audit');
   const again = await rpc.tool('recon_start_engagement', { name: 'real audit' });
-  assert.equal(again.data.resumed, true);
-  assert.equal(hub.tenant().store.state.project.id, realId);
+  assert.equal(again.data.existing, true);
   const ids = eng.list().engagements.map((e) => e.id);
   assert.ok(ids.includes(exampleId) && ids.includes(realId));
+  await rpc.tool('recon_map', { target: 'Example Lending Market', components: [] }).then((x) => assert.equal(x.isError, true, 'this session now works in "Real audit"'));
   eng.open(exampleId);
   assert.equal(hub.tenant().store.state.project.example, true);
+  await rpc.close();
 });
 
 test('recon_map builds the architecture by name and is idempotent', async () => {

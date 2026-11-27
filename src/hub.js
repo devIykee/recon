@@ -44,7 +44,7 @@ class Tenant {
     this.cfg = cfg;
     const dir = cfg.mode === 'multi' ? path.join(cfg.dataDir, 'tenants', id) : cfg.dataDir;
     this.store = new Store({ encryptionKey: cfg.encryptionKey });
-    this.engagements = new Engagements(dir, this.store, { seed: cfg.mode === 'multi' ? 'empty' : cfg.seed, log: cfg.log });
+    this.engagements = new Engagements(dir, this.store, { seed: cfg.mode === 'multi' ? 'empty' : cfg.seed, log: cfg.log, encryptionKey: cfg.encryptionKey });
     try { this.engagements.init(); } catch (err) {
       cfg.log(`recon: could not open the engagements in ${dir}: ${err.message}`);
       throw err;
@@ -104,6 +104,13 @@ export function createHub(overrides = {}) {
       pushSuggestions();
     });
     t.store.on('reset', () => send({ t: 'reset', state: statePayload(t) }));
+    // an agent working in a hunt that is not on screen: tell the board so the human can switch
+    let lastHuntPing = 0;
+    t.engagements.onSide = (id, s, evt) => {
+      if (!evt.activity || Date.now() - lastHuntPing < 4000) return;
+      lastHuntPing = Date.now();
+      send({ t: 'hunt-activity', hunt: { id, name: s.state.project.name }, activity: evt.activity, agent: s.state.items.agent[evt.activity.by]?.name || evt.activity.by });
+    };
     t.store.on('project', (project) => { send({ t: 'project', project }); pushSuggestions(); });
   }
 
@@ -378,16 +385,24 @@ export function createHub(overrides = {}) {
   route('POST', '/api/start', ({ t, body, who }) => {
     const name = String(body?.name || '').trim().slice(0, 120);
     if (!name) throw new HttpError(400, 'give the engagement a name');
-    const p = t.store.state.project;
-    if (!p.example && p.name.toLowerCase() === name.toLowerCase()) return { ok: true, project: p, existing: true };
-    const found = t.engagements.findByName(name);
+    const eng = t.engagements;
+    const main = eng.store;
+    const mainIdle = Date.now() - Math.max(0, ...main.state.activity.slice(-1).map((a) => a.at)) > 30 * 60_000;
+    // The board follows the agent only when nothing real is on it (the example, or a long-idle hunt).
+    const takeOver = main.state.project.example || mainIdle;
+    if (!main.state.project.example && main.state.project.name.toLowerCase() === name.toLowerCase()) return { ok: true, hunt: { id: main.state.project.id, name: main.state.project.name }, project: main.state.project, existing: true };
+    const found = eng.findByName(name);
     if (found && !found.example) {
-      t.engagements.open(found.id);
-      return { ok: true, project: t.store.state.project, resumed: true };
+      if (takeOver) eng.open(found.id);
+      return { ok: true, hunt: { id: found.id, name: found.name }, project: { id: found.id, name: found.name }, resumed: true, onScreen: takeOver };
     }
-    t.engagements.create({ name, mode: 'empty' });
-    t.store.log({ by: who, action: 'note', kind: 'project', summary: `started the engagement "${name}"` });
-    return { ok: true, project: t.store.state.project };
+    if (takeOver) {
+      eng.create({ name, mode: 'empty' });
+      main.log({ by: who, action: 'note', kind: 'project', summary: `started the hunt "${name}"` });
+      return { ok: true, hunt: { id: main.state.project.id, name }, project: main.state.project, onScreen: true };
+    }
+    const e = eng.createDetached({ name });
+    return { ok: true, hunt: { id: e.id, name: e.name }, project: { id: e.id, name: e.name }, onScreen: false };
   });
 
   route('GET', '/api/engagements', ({ t }) => t.engagements.list());
@@ -499,7 +514,14 @@ export function createHub(overrides = {}) {
         try { body = JSON.parse(raw); } catch { throw new HttpError(400, 'invalid json body'); }
       }
     }
-    const t = auth ? tenant(auth.tenant) : null;
+    const base = auth ? tenant(auth.tenant) : null;
+    const huntRef = req.headers['x-recon-hunt'] ? decodeURIComponent(String(req.headers['x-recon-hunt'])) : url.searchParams.get('hunt');
+    let t = base;
+    if (base && huntRef) {
+      try { t = Object.assign(Object.create(base), { store: base.engagements.storeFor(huntRef) }); } catch (err) {
+        if (!url.pathname.startsWith('/api/start') && !url.pathname.startsWith('/api/engagements') && url.pathname !== '/api/health') throw new HttpError(err.status || 404, err.message);
+      }
+    }
     const who = t ? actor(req, auth, t) : 'human';
     const result = await match.handler({ req, url, params, query: url.searchParams, body, auth, t, who });
     const extra = {};
@@ -527,21 +549,28 @@ export function createHub(overrides = {}) {
     const messages = Array.isArray(body) ? body : [body];
     const init = messages.find((m) => m?.method === 'initialize');
     const named = auth.agent || req.headers['x-recon-agent'] || url.searchParams.get('agent');
+    const huntAsked = req.headers['x-recon-hunt'] ? decodeURIComponent(String(req.headers['x-recon-hunt'])) : url.searchParams.get('hunt');
     if (init || !session) {
       sid = crypto.randomUUID();
       session = { tenant: auth.tenant, agent: String(named || init?.params?.clientInfo?.name || 'agent').slice(0, 60), at: Date.now() };
       mcpSessions.set(sid, session);
     }
     if (named) session.agent = String(named).slice(0, 60);
+    if (huntAsked) session.hunt = huntAsked;
     session.at = Date.now();
     const host = ['0.0.0.0', '::'].includes(cfg.host) ? '127.0.0.1' : cfg.host.includes(':') ? `[${cfg.host}]` : cfg.host;
-    const client = createClient({
-      url: `http://${host}:${server.address().port}`, agent: session.agent, transport: 'mcp',
+    const mk = () => createClient({
+      url: `http://${host}:${server.address().port}`, agent: session.agent, transport: 'mcp', hunt: session.hunt || null,
       headers: { 'x-recon-internal': internalToken, 'x-recon-tenant': session.tenant },
     });
+    let client = mk();
     const out = [];
     for (const m of messages) {
-      const r = await dispatch(m, { getClient: async () => client, onInitialize: () => t.store.touchAgent(session.agent, { transport: 'mcp' }) });
+      const r = await dispatch(m, {
+        getClient: async () => client,
+        onInitialize: () => t.store.touchAgent(session.agent, { transport: 'mcp' }),
+        ctx: { setHunt: (h) => { session.hunt = h; client = mk(); } },
+      });
       if (r) out.push(r);
     }
     if (!out.length) { res.writeHead(202, { 'mcp-session-id': sid }); res.end(); return; }

@@ -154,3 +154,26 @@ test('mcp over http: initialize names the agent from the client, tools work with
   assert.equal(forged.status, 401);
   await h.close();
 });
+
+test('two agents on two projects at once: each writes to its own hunt, the board stays put', async () => {
+  const h = createHub({ port: 0, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'recon-hunts-')), seed: 'empty', demo: false, log: () => {} });
+  await h.listen();
+  const u = `http://127.0.0.1:${h.port}`;
+  const as = (agent, hunt) => ({ 'content-type': 'application/json', 'x-recon-agent': agent, 'x-recon-hunt': encodeURIComponent(hunt) });
+  const post = (p, body, headers) => fetch(u + p, { method: 'POST', headers, body: JSON.stringify(body) }).then((r) => r.json());
+  await post('/api/start', { name: 'vault-repo' }, as('alpha', 'vault-repo'));
+  const onScreen = h.tenant().store.state.project.name;
+  await post('/api/items/target', { name: 'Vault' }, as('alpha', 'vault-repo'));
+  const bridge = await post('/api/start', { name: 'bridge-repo' }, as('beta', 'bridge-repo'));
+  assert.equal(bridge.onScreen, false, 'a busy board is not taken over');
+  await post('/api/items/target', { name: 'Bridge' }, as('beta', 'bridge-repo'));
+  assert.equal(h.tenant().store.state.project.name, onScreen);
+  const eng = h.tenant().engagements;
+  assert.deepEqual(eng.storeFor('vault-repo').list('target').map((t) => t.name), ['Vault']);
+  assert.deepEqual(eng.storeFor('bridge-repo').list('target').map((t) => t.name), ['Bridge']);
+  const briefing = await fetch(`${u}/api/briefing`, { headers: as('beta', 'bridge-repo') }).then((r) => r.json());
+  assert.equal(briefing.whereWeLeftOff.engagement.name, 'bridge-repo');
+  eng.open(bridge.hunt.id);
+  assert.deepEqual(h.tenant().store.list('target').map((t) => t.name), ['Bridge'], 'opening it shows the agent\'s work');
+  await h.close();
+});

@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { seedExample, seedEmpty } from './seed.js';
-import { normalizeState } from './store.js';
+import { normalizeState, Store } from './store.js';
 import { newId } from './model.js';
 
 const HOUR = 3600_000;
@@ -19,9 +19,14 @@ const SNAPSHOT_EVERY = HOUR;
 const KEEP_ALL_FOR = 48 * HOUR;
 
 export class Engagements {
-  constructor(dir, store, { seed = 'example', log = () => {} } = {}) {
+  constructor(dir, store, { seed = 'example', log = () => {}, encryptionKey = null } = {}) {
     this.dir = dir;
     this.store = store;
+    this.encryptionKey = encryptionKey;
+    // Hunts other than the one on screen that an agent is working in right now.
+    this.side = new Map();
+    this.onSide = null;
+    this.sideRev = new Map();
     this.seed = seed;
     this.log = log;
     this.indexFile = path.join(dir, 'index.json');
@@ -72,9 +77,9 @@ export class Engagements {
 
   entry(id) { return this.index.engagements.find((e) => e.id === id) || null; }
 
-  upsertEntry() {
-    const p = this.store.state.project;
-    const items = this.store.state.items;
+  upsertEntry(store = this.store) {
+    const p = store.state.project;
+    const items = store.state.items;
     const e = this.entry(p.id) || { id: p.id, createdAt: p.createdAt || Date.now() };
     Object.assign(e, {
       name: p.name,
@@ -110,6 +115,54 @@ export class Engagements {
     };
   }
 
+  // Find a hunt by id or by name (case-insensitive).
+  resolve(ref) {
+    if (!ref) return null;
+    const r = String(ref).trim().toLowerCase();
+    return this.index.engagements.find((e) => e.id === ref) || this.index.engagements.find((e) => e.name.toLowerCase() === r) || null;
+  }
+
+  // The store for a hunt: the one on screen, or a second one loaded for an agent working elsewhere.
+  storeFor(ref) {
+    const e = this.resolve(ref);
+    if (!e) { const err = new Error(`no hunt "${ref}". Start it first (recon_start_engagement / recon start "<name>").`); err.status = 404; throw err; }
+    if (e.id === this.store.state.project.id) return this.store;
+    let s = this.side.get(e.id);
+    if (!s) {
+      s = new Store({ encryptionKey: this.encryptionKey });
+      s.switchTo(this.fileFor(e.id));
+      this.side.set(e.id, s);
+      let t = null;
+      s.on('change', (evt) => {
+        clearTimeout(t);
+        t = setTimeout(() => { this.upsertEntry(s); this.saveIndex(); }, 500);
+        this.onSide?.(e.id, s, evt);
+      });
+    }
+    return s;
+  }
+
+  // Give a hunt's file back to the main store: the side copy is saved and dropped.
+  releaseSide(id) {
+    const s = this.side.get(id);
+    if (!s) return;
+    s.flush();
+    s.removeAllListeners();
+    this.side.delete(id);
+  }
+
+  // Create a hunt without changing what the human is looking at.
+  createDetached({ name }) {
+    const s = new Store({ encryptionKey: this.encryptionKey });
+    s.switchTo(null, { fresh: true });
+    seedEmpty(s, name || 'New hunt');
+    s.file = this.fileFor(s.state.project.id);
+    s.flush();
+    this.upsertEntry(s);
+    this.saveIndex();
+    return this.entry(s.state.project.id);
+  }
+
   // Start a new engagement and make it current. The previous one is saved, not touched.
   create({ name, mode = 'empty', doc = null } = {}) {
     if (this.store.file) { this.store.flush(); this.snapshot({ force: true }); }
@@ -137,6 +190,7 @@ export class Engagements {
     if (!e) throw notFound(id);
     if (this.store.state.project.id === id && this.store.file === this.fileFor(id)) return e;
     if (this.store.file) { this.store.flush(); this.snapshot({ force: true }); }
+    this.releaseSide(id);
     this.store.switchTo(this.fileFor(id));
     this.index.current = id;
     this.upsertEntry();
@@ -178,22 +232,26 @@ export class Engagements {
   // ---------- snapshots ----------
 
   maybeSnapshot(now = Date.now()) {
+    for (const [id, s] of this.side) {
+      const last = this.sideRev.get(id) || { rev: -1, at: 0 };
+      if (s.rev !== last.rev && now - last.at >= SNAPSHOT_EVERY) { this.snapshot({ now, store: s }); this.sideRev.set(id, { rev: s.rev, at: now }); }
+    }
     if (this.store.rev === this.lastSnapshotRev) return null;
     if (now - this.lastSnapshotAt < SNAPSHOT_EVERY) return null;
     return this.snapshot({ now });
   }
 
-  snapshot({ force = false, now = Date.now() } = {}) {
-    if (!force && this.store.rev === this.lastSnapshotRev) return null;
-    const id = this.store.state.project.id;
+  snapshot({ force = false, now = Date.now(), store = this.store } = {}) {
+    const main = store === this.store;
+    if (main && !force && store.rev === this.lastSnapshotRev) return null;
+    const id = store.state.project.id;
     const dir = this.snapDir(id);
     fs.mkdirSync(dir, { recursive: true });
     const stamp = new Date(now).toISOString().replace(/[:.]/g, '-');
     let file = path.join(dir, `${stamp}.json`);
     for (let n = 1; fs.existsSync(file); n++) file = path.join(dir, `${stamp}-${n}.json`);
-    fs.writeFileSync(file, this.store.serialize(), { mode: 0o600 });
-    this.lastSnapshotRev = this.store.rev;
-    this.lastSnapshotAt = now;
+    fs.writeFileSync(file, store.serialize(), { mode: 0o600 });
+    if (main) { this.lastSnapshotRev = store.rev; this.lastSnapshotAt = now; }
     this.prune(id, now);
     return path.basename(file);
   }
@@ -237,6 +295,7 @@ export class Engagements {
 
   close() {
     clearTimeout(this.touchTimer);
+    for (const id of [...this.side.keys()]) this.releaseSide(id);
     try { this.upsertEntry(); this.saveIndex(); } catch { /* best effort */ }
   }
 }

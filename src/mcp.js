@@ -45,7 +45,11 @@ export const TOOLS = [
     name: 'recon_start_engagement',
     description: 'Start a real engagement when the board only holds the built-in example (recon_briefing says so). Name it after what you are researching. It never wipes a real engagement.',
     inputSchema: { type: 'object', properties: { name: str('e.g. "Acme Vault review"') }, required: ['name'] },
-    run: (c, a) => c.start(a.name),
+    run: async (c, a, ctx = {}) => {
+      const r = await c.start(a.name);
+      ctx.setHunt?.(r.hunt?.name || a.name);
+      return { ...r, note: r.onScreen === false ? 'Started in the background: the human is looking at another hunt. Your work lands here; the board offers them a switch.' : undefined };
+    },
   },
   {
     name: 'recon_list',
@@ -481,9 +485,10 @@ export async function dispatch(msg, { getClient, onInitialize, ctx = {} } = {}) 
   }
 }
 
-export async function runMcp({ name = process.env.RECON_AGENT || 'agent', url, key, model, input = process.stdin, output = process.stdout, log = (...a) => console.error(...a), embed = true } = {}) {
+export async function runMcp({ name = process.env.RECON_AGENT || 'agent', url, key, model, hunt = null, input = process.stdin, output = process.stdout, log = (...a) => console.error(...a), embed = true } = {}) {
   const hubUrl = (url || defaultUrl()).replace(/\/$/, '');
   let client = createClient({ url: hubUrl, key, agent: name, transport: 'mcp', model });
+  let huntName = hunt;
   let embedded = null;
 
   // Reach the hub. Locally, start one in the background so the board outlives this
@@ -508,13 +513,27 @@ export async function runMcp({ name = process.env.RECON_AGENT || 'agent', url, k
     client = createClient({ url: embedded.url, key, agent: name, transport: 'mcp', model });
   }
 
-  const hubReady = ensureHub().catch((err) => log(`recon mcp: ${err.message}`));
+  // Work in the hunt named after this project: start or resume it once the hub is up.
+  async function enterHunt() {
+    if (!huntName) return;
+    try {
+      const r = await client.start(huntName);
+      huntName = r.hunt?.name || huntName;
+      client = createClient({ url: client.url, key, agent: name, transport: 'mcp', model, hunt: huntName });
+      log(`recon mcp: working in the hunt "${huntName}"${r.onScreen === false ? ' (in the background; the board offers a switch)' : ''}`);
+    } catch (err) { log(`recon mcp: could not open the hunt "${huntName}": ${err.message}`); huntName = null; }
+  }
+
+  const hubReady = ensureHub().catch((err) => log(`recon mcp: ${err.message}`)).then(() => enterHunt());
 
   const send = (msg) => output.write(`${JSON.stringify(msg)}\n`);
 
   async function handle(msg) {
     const res = await dispatch(msg, {
-      ctx: { canWriteFiles: true, cwd: process.cwd() },
+      ctx: {
+        canWriteFiles: true, cwd: process.cwd(),
+        setHunt: (h) => { huntName = h; client = createClient({ url: client.url, key, agent: name, transport: 'mcp', model, hunt: h }); },
+      },
       getClient: async () => { await hubReady; return client; },
       onInitialize: () => hubReady.then(() => client.heartbeat({}).catch(() => {})),
     });

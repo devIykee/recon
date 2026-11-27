@@ -186,7 +186,7 @@ function welcome() {
       h('li', h('b', 'Click a tile'), ' to see the agent\'s evidence, then verify or dispute it.'),
       h('li', h('b', 'Leave a steer'), ' and watch Scout acknowledge it, then report back.')),
     h('div.actions',
-      h('button.btn.btn-primary', { on: { click: () => { close(); startOwn(); } } }, icon('target'), 'Start my own engagement'),
+      h('button.btn.btn-primary', { on: { click: () => { close(); startOwn(); } } }, icon('target'), 'Start my own hunt'),
       h('button.btn', { on: { click: close } }, 'Keep exploring')));
   app.append(el);
 }
@@ -195,9 +195,9 @@ async function startOwn() {
   const name = h('input.input', { placeholder: 'e.g. Acme audit, May bounty run', value: '' });
   const m = modal([
     h('div.steps', h('span.on'), h('span'), h('span')),
-    h('h2', 'Start your own engagement'),
+    h('h2', 'Start a new hunt'),
     h('p.lead', 'Three quick steps: name a target, pick what kind of protocol it is, connect your agent. The example stays in your engagements list; nothing is deleted.'),
-    h('div.field', h('label', 'Engagement name'), name),
+    h('div.field', h('label', 'Hunt name (usually the project)'), name),
     h('div.modal-actions', h('button.btn', { on: { click: () => m.close() } }, 'Cancel'),
       h('button.btn.btn-primary', {
         on: {
@@ -227,7 +227,7 @@ function openMenu(anchor) {
     { text: 'Finding', icon: 'bug', action: () => newItem('finding') },
     { text: 'Open thread', icon: 'compass', action: () => newItem('lead') },
     '-',
-    { text: 'Engagements…', icon: 'clock', shortcut: 'E', action: openEngagements },
+    { text: 'Hunts…', icon: 'clock', shortcut: 'E', action: openEngagements },
     { text: 'Report…', icon: 'file', shortcut: 'R', action: openReport },
     { text: 'Connect an agent', icon: 'plug', shortcut: 'C', action: () => openConnect() },
     { text: 'Export project (JSON)', icon: 'download', action: exportProject },
@@ -288,7 +288,7 @@ async function openHelp() {
         h('kbd', 'Space'), h('span', 'Hold and drag to pan'),
         h('kbd', '['), h('span', 'Toggle the side panel'),
         h('kbd', 'C'), h('span', 'Connect an agent'),
-        h('kbd', 'E'), h('span', 'Engagements (saved sessions, snapshots)'),
+        h('kbd', 'E'), h('span', 'Hunts: one per project, saved, with snapshots'),
         h('kbd', 'R'), h('span', 'The report'),
         h('kbd', 'N'), h('span', 'Add something'),
         h('kbd', 'Esc'), h('span', 'Close'))),
@@ -403,6 +403,9 @@ on((evt) => {
     case 'auth':
       askKey();
       break;
+    case 'hunt-activity':
+      huntToast(evt);
+      break;
     default:
       schedule();
   }
@@ -417,6 +420,17 @@ function notify({ kind, item, prev, activity }) {
   }
   if (kind === 'proposal' && !prev) toast(`${authorName(activity.by)} proposes: ${truncateText(item.text, 80)} — open Next to answer`);
   if (kind === 'agent' && !prev) toast(`${item.name} connected over ${item.transport}`, 'ok');
+}
+
+// An agent is working in a hunt that is not on screen: offer to switch, at most once a minute per hunt.
+const huntToasts = new Map();
+function huntToast({ hunt, agent, activity }) {
+  if (!hunt || Date.now() - (huntToasts.get(hunt.id) || 0) < 60_000) return;
+  huntToasts.set(hunt.id, Date.now());
+  const t = h('div.toast', icon('target'), h('span', h('b', agent), ` is working in the hunt "${hunt.name}": ${truncateText(activity?.summary || '', 60)}`),
+    h('button.btn.btn-xs.btn-primary', { on: { click: async () => { await post(`/api/engagements/${hunt.id}/open`); t.remove(); } } }, 'Switch'));
+  document.getElementById('toasts').append(t);
+  setTimeout(() => t.remove(), 9000);
 }
 
 function truncateText(s, n) {
@@ -438,7 +452,24 @@ $('project-name').addEventListener('change', async (e) => {
   if (!v) { e.target.value = live.state.project.name; return; }
   try { await patch('/api/project', { name: v }); } catch (err) { toast(err.message, 'error'); }
 });
-$('engagements-btn')?.addEventListener('click', () => openEngagements());
+// Quick hunt switcher next to the title.
+$('engagements-btn')?.addEventListener('click', async (e) => {
+  const anchor = e.currentTarget;
+  let r;
+  try { r = await get('/api/engagements'); } catch (err) { toast(err.message, 'error'); return; }
+  const recent = r.engagements.filter((x) => !x.archived).slice(0, 8);
+  menu(anchor, [
+    { label: 'Hunts' },
+    ...recent.map((x) => ({
+      text: `${x.id === r.current ? '● ' : ''}${x.name}`, icon: x.example ? 'sparkle' : 'target',
+      sub: `${x.stats?.findings ?? 0} findings · ${x.stats?.agents ?? 0} agents`,
+      action: async () => { if (x.id !== r.current) { await post(`/api/engagements/${x.id}/open`); toast(`Opened "${x.name}".`, 'ok'); } },
+    })),
+    '-',
+    { text: 'New hunt…', icon: 'plus', action: startOwn },
+    { text: 'All hunts and snapshots…', icon: 'clock', shortcut: 'E', action: openEngagements },
+  ]);
+});
 $('project-name').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Escape') e.target.blur(); });
 
 for (const b of document.querySelectorAll('[data-zoom]')) {

@@ -13,6 +13,7 @@ import { spawnSync } from 'node:child_process';
 import { installCopy, ensureHub, openBrowser, reconHome, GITHUB_SPEC } from './launch.js';
 import { createClient, defaultUrl } from './client.js';
 import { ENUMS } from './model.js';
+import { projectName } from './project.js';
 
 export const PASTE_LINE = `Run \`npx -y ${GITHUB_SPEC} agent\` and follow its instructions to do this security review with me on the recon board.`;
 
@@ -26,16 +27,22 @@ const quote = (s) => (/^[\w./:@=+~-]+$/.test(s) ? s : JSON.stringify(s));
 
 // ---------- recon agent ----------
 
-export async function runAgent({ name, url, key, out = process.stdout, err = process.stderr }) {
+export async function runAgent({ name, url, key, hunt = undefined, out = process.stdout, err = process.stderr }) {
   const { bin, shim } = installCopy();
   const hub = await ensureHub({ url: url || defaultUrl(), key, bin, log: (m) => err.write(`${m}\n`) });
   const who = name || '<your-name>';
   const env = hub.url !== defaultUrl({}) ? `RECON_URL=${hub.url} ` : '';
-  const R = `${env}${quote(tilde(shim))} --as ${who}`;
+  // Different projects get different hunts: name it after the project this agent is working in.
+  const huntName = hunt === undefined ? projectName(process.cwd()) : hunt;
+  let started = null;
+  if (huntName) { try { started = await createClient({ url: hub.url, key, agent: name || null, transport: 'cli' }).start(huntName); } catch (e) { err.write(`recon: could not open the hunt "${huntName}": ${e.message}\n`); } }
+  const huntFlag = started ? ` --hunt ${quote(started.hunt?.name || huntName)}` : '';
+  const R = `${env}${quote(tilde(shim))} --as ${who}${huntFlag}`;
   let state = null;
-  try { state = await createClient({ url: hub.url, key }).state(); } catch { /* board still fine */ }
+  try { state = await createClient({ url: hub.url, key, hunt: started ? (started.hunt?.name || huntName) : null }).state(); } catch { /* board still fine */ }
   const lines = [
     `recon is ready. Tell the human: the live board is at ${hub.url} (open it to watch, verify and steer).`,
+    started ? `This project's hunt is "${started.hunt?.name || huntName}"${started.resumed || started.existing ? ' (resumed: call briefing to see where you left off)' : ''}${started.onScreen === false ? '. The human is looking at another hunt; the board offers them a switch.' : '.'}` : '',
     '',
     'You are now an agent on a shared security-research board. The human watches it live,',
     'verifies or disputes your claims, and leaves steers for you. Use the recon CLI below.',
@@ -48,7 +55,7 @@ export async function runAgent({ name, url, key, out = process.stdout, err = pro
     '',
     'Start',
     `  ${R} briefing                    what to do next: steers for you, phase, the playbook`,
-    `  ${R} start "<engagement name>"   only if the briefing says the board holds the example`,
+    `  ${R} start "<hunt name>"         only if you need a different hunt than this project's`,
     `  ${R} add target "<name>" --type <${ENUMS.protocolType.join('|')}>`,
     '',
     '1. Map the system (phase: mapping)',

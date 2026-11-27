@@ -81,6 +81,8 @@ global
   --url URL     hub url (env RECON_URL, default ${defaultUrl()})
   --key KEY     hub key (env RECON_KEY), for server mode
   --as NAME     act as an agent (env RECON_AGENT). without it you act as the human
+  --hunt NAME   work in this hunt (env RECON_HUNT); default: the one on the board.
+                recon mcp and recon agent pick the hunt named after the project folder
   --json        raw json output
 `;
 
@@ -175,7 +177,8 @@ function need(v, what) {
 
 // ---------- commands ----------
 
-const client = () => createClient({ url: flags.url, key: flags.key ?? process.env.RECON_KEY, agent: agentName, transport: 'cli' });
+const huntRef = typeof flags.hunt === 'string' ? flags.hunt : (process.env.RECON_HUNT || null);
+const client = () => createClient({ url: flags.url, key: flags.key ?? process.env.RECON_KEY, agent: agentName, transport: 'cli', hunt: huntRef });
 
 async function serve() {
   const { createHub } = await import('../src/hub.js');
@@ -211,7 +214,10 @@ async function serve() {
 
 async function mcp() {
   const { runMcp } = await import('../src/mcp.js');
-  await runMcp({ name: flags.name || agentName || 'agent', url: flags.url, key: flags.key ?? process.env.RECON_KEY, model: flags.model });
+  const { projectName } = await import('../src/project.js');
+  // each project gets its own hunt: named after the git repo / package / folder the agent runs in
+  const hunt = flags.hunt === false ? null : (huntRef || projectName(process.cwd()));
+  await runMcp({ name: flags.name || agentName || 'agent', url: flags.url, key: flags.key ?? process.env.RECON_KEY, model: flags.model, hunt });
 }
 
 async function status() {
@@ -552,7 +558,7 @@ async function setup() {
 
 async function agentCmd() {
   const { runAgent } = await import('../src/setup.js');
-  await runAgent({ name: agentName, url: flags.url, key: flags.key ?? process.env.RECON_KEY });
+  await runAgent({ name: agentName, url: flags.url, key: flags.key ?? process.env.RECON_KEY, hunt: flags.hunt === false ? null : huntRef });
 }
 
 async function start() {

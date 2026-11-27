@@ -142,6 +142,9 @@ function handle(msg) {
     case 'project':
       if (live.state) { live.state.project = msg.project; emit({ type: 'project' }); }
       break;
+    case 'hunt-activity':
+      emit({ type: 'hunt-activity', hunt: msg.hunt, agent: msg.agent, activity: msg.activity });
+      break;
     default:
   }
 }

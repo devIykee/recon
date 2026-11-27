@@ -1,4 +1,4 @@
-// Two modals: the report slot, and the list of engagements (long-lived sessions).
+// Two modals: the report slot, and the list of hunts (long-lived sessions, one per project).
 
 import { h, icon, modal, toast, setChildren, confirmDialog, ago } from './ui.js';
 import { get, patch, post, del, list } from './state.js';
@@ -85,8 +85,8 @@ export async function openEngagements() {
     const visible = r.engagements.filter((e) => showArchived || !e.archived || e.id === r.current);
     const name = h('input.input', { placeholder: 'e.g. Acme bounty, June audit' });
     m.set(
-      h('h2', 'Engagements'),
-      h('p.lead', 'Every engagement on this machine, saved as you work and kept until you remove it. Close the tab or the laptop; it is all here when you come back, even a year later. Snapshots are taken hourly while things change.'),
+      h('h2', 'Hunts'),
+      h('p.lead', 'One hunt per project, saved as you work and kept until you remove it. Agents start or resume the hunt for the project they are working in. Close the tab or the laptop; it is all here when you come back, even a year later. Snapshots are taken hourly while things change.'),
       h('div.eng-list', ...visible.map((e) => h(`div.eng${e.id === r.current ? '.current' : ''}`,
         h('b', e.name, e.example ? h('span.pill.pill-example', { style: { marginLeft: '8px' } }, 'example') : null, e.archived ? h('span.pill', { style: { marginLeft: '8px' } }, 'archived') : null),
         h('div.acts',
@@ -123,12 +123,12 @@ export async function openEngagements() {
         h('button.btn.btn-primary', {
           on: {
             click: async () => {
-              await post('/api/engagements', { name: name.value.trim() || 'New engagement', mode: 'empty' });
+              await post('/api/engagements', { name: name.value.trim() || 'New hunt', mode: 'empty' });
               m.close();
-              toast('Started a new engagement. The previous one is saved.', 'ok');
+              toast('Started a new hunt. The previous one is saved.', 'ok');
             },
           },
-        }, icon('plus'), 'New engagement')),
+        }, icon('plus'), 'New hunt')),
     );
     void setChildren;
   }
