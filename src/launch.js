@@ -34,29 +34,45 @@ function treeHash(root) {
   return h.digest('hex');
 }
 
-// Copy this package to ~/.recon/app so agent configs point at a stable, fast,
-// offline path instead of an npx cache. Re-running updates it.
-export function installCopy({ home = reconHome() } = {}) {
+// Copy recon to ~/.recon/app so agent configs point at a stable, fast, offline
+// path instead of an npx cache. Re-running refreshes it, except that a copy that
+// `recon update` installed is never replaced by whatever an npx cache holds,
+// which may be older: only `recon update` (force) replaces it.
+export function installCopy({ home = reconHome(), from = ROOT, force = false, stamp = null } = {}) {
   const app = path.join(home, 'app');
   const bin = path.join(app, 'bin', 'recon.js');
-  if (path.resolve(ROOT) === path.resolve(app)) return { app, bin, updated: false };
-  const want = treeHash(ROOT);
-  const stamp = path.join(app, '.hash');
-  if (fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8') === want && fs.existsSync(bin)) {
+  if (path.resolve(from) === path.resolve(app)) return { app, bin, updated: false, shim: writeShim(home, bin) };
+  const marker = path.join(app, '.version.json');
+  let current = {};
+  try { current = JSON.parse(fs.readFileSync(marker, 'utf8')); } catch { /* none yet */ }
+  if (!force && current.source === 'update' && fs.existsSync(bin)) return { app, bin, updated: false, kept: current, shim: writeShim(home, bin) };
+  const want = treeHash(from);
+  const hashFile = path.join(app, '.hash');
+  if (fs.existsSync(hashFile) && fs.readFileSync(hashFile, 'utf8') === want && fs.existsSync(bin)) {
+    if (stamp) fs.writeFileSync(marker, JSON.stringify(stamp, null, 2));
     return { app, bin, updated: false, shim: writeShim(home, bin) };
   }
   const tmp = `${app}.tmp-${process.pid}`;
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.mkdirSync(tmp, { recursive: true });
   for (const top of COPY) {
-    const src = path.join(ROOT, top);
+    const src = path.join(from, top);
     if (fs.existsSync(src)) fs.cpSync(src, path.join(tmp, top), { recursive: true });
   }
-  fs.writeFileSync(path.join(tmp, '.hash'), want);
-  fs.rmSync(app, { recursive: true, force: true });
+  fs.writeFileSync(path.join(tmp, '.version.json'), JSON.stringify(stamp || { source: 'copy', installedAt: new Date().toISOString() }, null, 2));
+  // written last: running MCP servers watch this file and switch over when it changes
+  const old = `${app}.old-${process.pid}`;
+  if (fs.existsSync(app)) fs.renameSync(app, old);
   fs.renameSync(tmp, app);
+  fs.rmSync(old, { recursive: true, force: true });
   fs.chmodSync(bin, 0o755);
+  fs.writeFileSync(hashFile, want);
   return { app, bin, updated: true, shim: writeShim(home, bin) };
+}
+
+// The hash running MCP servers compare against to know the install changed.
+export function installHash(home = reconHome()) {
+  try { return fs.readFileSync(path.join(home, 'app', '.hash'), 'utf8'); } catch { return null; }
 }
 
 // ~/.recon/bin/recon (and recon.cmd on windows) so humans and agents can type `recon`.

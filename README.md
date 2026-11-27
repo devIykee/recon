@@ -41,6 +41,20 @@ the project the agent is working in, and an agent switches with
 
 Needs Node 20+. Zero dependencies. Everything stays on your machine, in `~/.recon`.
 
+### Update
+
+```sh
+recon update            # or: ~/.recon/bin/recon update
+```
+
+It downloads the latest recon from GitHub, installs it in `~/.recon/app` and
+restarts the board (your hunts are saved first). Every agent picks it up
+without being restarted: the CLI runs the new code from its next command, and
+agents connected over MCP switch to it within a few seconds, keep their hunt,
+and are told their tool list changed. `recon update --check` only says whether
+there is something new. (An MCP server started by a version from before this
+existed needs its agent restarted once.)
+
 ### Tested with real agents
 
 Against a small vulnerable vault, a Claude Code agent given only the line above

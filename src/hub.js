@@ -520,6 +520,16 @@ export function createHub(overrides = {}) {
     };
   });
 
+  // `recon update` asks a local board to save and stop so it can start the new version.
+  route('POST', '/api/shutdown', ({ who, req }) => {
+    if (cfg.mode !== 'local' || !overrides.onShutdown) throw new HttpError(404, 'this board is not running as a local service');
+    if (who !== 'human') throw new HttpError(403, 'only the human can stop the board');
+    const ip = req.socket.remoteAddress || '';
+    if (!/^(127\.|::1$|::ffff:127\.)/.test(ip)) throw new HttpError(403, 'only from this machine');
+    setTimeout(() => overrides.onShutdown(), 50);
+    return { ok: true, stopping: true };
+  });
+
   route('POST', '/api/heartbeat', ({ t, who, body }) => {
     if (who === 'human') throw new HttpError(400, 'heartbeat is for agents; send X-Recon-Agent');
     const patch = {};
