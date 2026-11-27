@@ -9,7 +9,7 @@ configuration changes.
 | for | one researcher + their agents | a team or always-on swarm | a hosted product |
 | binds | `127.0.0.1` | `0.0.0.0` | `0.0.0.0` |
 | auth | none (localhost only) | one shared key | api keys mapped to tenants |
-| data | `./.recon/state.json` | a volume | one store per tenant |
+| data | `~/.recon/data/state.json` | a volume | one store per tenant |
 
 ## Local (default)
 
@@ -91,7 +91,8 @@ The design keeps these additive: they sit in front of, or inside, `Tenant` in
 | `RECON_MODE` | `--mode` | `local` | `local`, `server`, `multi` |
 | `RECON_HOST` | `--host` | `127.0.0.1` (local) / `0.0.0.0` | bind address |
 | `RECON_PORT` / `PORT` | `--port` | `4317` | |
-| `RECON_DATA` | `--data` | `./.recon` | where state lives |
+| `RECON_DATA` | `--data` | `~/.recon/data` | where state lives |
+| `RECON_HOME` | | `~/.recon` | the local install, `recon` command and hub log |
 | `RECON_KEY` | `--key` | | shared key (server mode) |
 | `RECON_KEYS_FILE` | `--keys` | | key → tenant map (multi mode) |
 | `RECON_ENCRYPTION_KEY` | | | encrypt state at rest |

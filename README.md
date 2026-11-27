@@ -9,29 +9,49 @@ can't see its progress, can't check what it did, and can't hand it the
 live, human-readable board. The agents do the tireless scanning, you bring
 intuition and judgement, and each side sees the other's work as it happens.
 
+## Start in one line
+
+**Paste this into any coding agent** (Claude Code, OpenCode, Grok CLI, Codex, Gemini CLI, Cursor, anything with a terminal):
+
+```
+Run `npx -y github:devIykee/recon agent` and follow its instructions to do this security review with me on the recon board.
+```
+
+That's it: no install, no config, no restart. The agent starts the board in the
+background, tells you where it is (http://127.0.0.1:4317), sets up the
+engagement, and starts recording what it reviews, suspects and confirms. You watch,
+verify, dispute and steer from the browser.
+
+**Or install the tools once in your terminal**, so recon shows up as native MCP
+tools in every agent you have:
+
+```sh
+npx -y github:devIykee/recon setup
+```
+
+It finds Claude Code, Codex, Gemini CLI, OpenCode, Cursor, Windsurf and Claude
+Desktop, adds recon to each, and opens the board. (Grok CLI keeps MCP servers per
+project: run `setup --here` inside the project.) Restart your agent and say
+*"Use recon: call recon_briefing and work the board with me."*
+
+Needs Node 20+. Zero dependencies. Everything stays on your machine, in `~/.recon`.
+
+### Tested with real agents
+
+Against a small vulnerable vault, a Claude Code agent given only the line above
+set up the engagement, mapped the attack surface, and found all three planted
+bugs (reentrancy, an unprotected fee setter, first-depositor inflation) with
+file:line evidence. It answered a steer left mid-run, and when its claim was
+disputed it re-checked and downgraded it. A second agent joined over MCP,
+challenged a trust assumption, and *proposed* a re-rating for a yes/no instead
+of acting on its own. `recon setup` registration was checked against the real
+Claude Code, OpenCode, Codex, Gemini CLI and Grok CLI binaries; Claude Code,
+OpenCode and Grok also confirmed a live connection with all recon tools listed.
+
 ![The project map](docs/img/map.jpg)
 
-## Start in a minute
-
-```sh
-git clone https://github.com/deviykee/recon && cd recon
-node bin/recon.js serve          # → http://127.0.0.1:4317
-```
-
-No install step: Node 20+ and zero runtime dependencies. The board opens on an
-example engagement worked live by **Scout**, a simulated agent, so you can see
-everything working before connecting anything. Click **Start my own** when you
-are ready: name a target, pick what kind of protocol it is, connect your agent.
-
-Connect a real agent (Claude Code shown; any MCP client works):
-
-```sh
-claude mcp add recon -- node /path/to/recon/bin/recon.js mcp --name my-agent
-```
-
-Then tell it: *"Use the recon tools. Start with recon_briefing."* The
-**Connect agent** button walks through MCP, CLI, HTTP and drop-in JSON with
-copy-paste snippets, and flips to "connected" the moment your agent arrives.
+To try the built-in example without an agent: `npx -y github:devIykee/recon serve`.
+It opens on an example engagement worked live by **Scout**, a simulated agent.
 
 ## What you get
 
@@ -110,7 +130,7 @@ Full reference: [docs/API.md](docs/API.md). Every entity, field and enum:
 - **Ownership.** Agents claim components (starting to scan one claims it), and
   another agent can only add evidence there.
 - **Local-first.** By default the hub binds to localhost, keeps data in
-  `./.recon`, works offline, refuses foreign Host headers and cross-origin writes,
+  `~/.recon`, works offline, refuses foreign Host headers and cross-origin writes,
   and serves a strict CSP. Findings and embargoed disclosures never leave your
   machine.
 

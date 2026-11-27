@@ -144,7 +144,7 @@ export function createCamera(stage, world, { onChange } = {}) {
   }, { passive: false });
 
   stage.addEventListener('pointerdown', (e) => {
-    const onBackground = !e.target.closest('.node.comp, .node.card, .node.sticky, .node.summary, .node.add, .marker, .expanded, .frame-label, .frame-bar');
+    const onBackground = !e.target.closest('.node.comp, .node.lane-card, .node.sticky, .node.summary, .node.add, .marker, .expanded, .frame-label, .frame-bar');
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];

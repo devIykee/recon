@@ -68,6 +68,7 @@ export async function runAgent({ name, url, key, out = process.stdout, err = pro
     '  - Back every claim with evidence (file:line, function, tx). Unbacked claims get disputed, and disputes come back to you as steers.',
     '  - Never set verification or priority: those are the human\'s.',
     '  - Do not overwrite components another agent owns; add evidence instead.',
+    `  - Before filing a hypothesis or finding, check what exists (${R} list finding, ${R} list hypothesis). Add evidence to an existing one rather than duplicating it.`,
     '  - Steers never require you to stop. Acknowledge fast, address when you get there.',
     '  - Names work wherever ids do, e.g. "Vault.withdraw()".',
   ];

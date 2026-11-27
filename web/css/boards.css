@@ -263,6 +263,9 @@
 .sug-why { font-size: 12px; color: var(--muted); margin: 4px 0 8px 23px; line-height: 1.4; }
 .sug-actions { display: flex; gap: 6px; margin-left: 23px; }
 .proposal { border: 1.5px solid var(--primary); background: var(--primary-ghost); }
+.proposal .sug-title > span, .proposal .sug-why { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+.proposal .sug-title > span { font-weight: 500; }
+.proposal.expanded .sug-title > span, .proposal.expanded .sug-why { -webkit-line-clamp: unset; display: block; }
 .proposal .sug-title .icon { color: var(--primary); }
 .proposal.decided { border-color: var(--border); background: var(--island-2); opacity: .7; }
 

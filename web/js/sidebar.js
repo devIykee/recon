@@ -129,7 +129,11 @@ export function createSidebar(root) {
     }
     const proposals = list('proposal').sort((a, b) => (a.state === 'pending' ? -1 : 1) - (b.state === 'pending' ? -1 : 1) || b.createdAt - a.createdAt).slice(0, 10);
     p.querySelector('.prop-label').hidden = !proposals.length;
-    keyed(p.querySelector('.props-list'), proposals, (x) => x.id, () => h('div.sug.proposal'), (el, x) => {
+    keyed(p.querySelector('.props-list'), proposals, (x) => x.id, () => {
+      const el = h('div.sug.proposal', { title: 'Click to read in full' });
+      el.addEventListener('click', (e) => { if (!e.target.closest('button, .steer-item')) el.classList.toggle('expanded'); });
+      return el;
+    }, (el, x) => {
       if (el._v === x.updatedAt) return;
       el._v = x.updatedAt;
       el.classList.toggle('decided', x.state !== 'pending');

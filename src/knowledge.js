@@ -602,6 +602,10 @@ export function briefing(state, agentId) {
     ownedByOthers: othersOwn,
     untouched: untouched.slice(0, 25),
     yourProposals: proposals,
+    existing: {
+      findings: Object.values(items.finding).map((f) => ({ id: f.id, title: f.title, severity: f.severity, stage: f.stage, componentId: f.componentId, by: f.createdBy })),
+      hypotheses: Object.values(items.hypothesis).map((x) => ({ id: x.id, text: x.text, status: x.status, componentId: x.componentId, by: x.createdBy })),
+    },
     suggestions: suggestions.map(({ id, title, why, action, itemId, itemKind }) => ({ id, title, why, action, itemId, itemKind })),
     targets,
     rules: [
@@ -610,6 +614,7 @@ export function briefing(state, agentId) {
       'Do not overwrite components owned by another agent. Add evidence instead.',
       'Steers never block you. Acknowledge quickly, address when you get there.',
       'When unsure what to do next, propose it instead of waiting or guessing.',
+      'Before adding a hypothesis or finding, check existing.findings and existing.hypotheses. If it is already there, add evidence to it instead of filing a duplicate.',
     ],
   };
 }

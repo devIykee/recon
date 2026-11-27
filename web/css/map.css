@@ -172,7 +172,7 @@
 
 /* ---------- hypotheses, findings ---------- */
 
-.node.card { cursor: pointer; }
+.node.lane-card { cursor: pointer; }
 .node.hyp { --c: var(--primary); }
 .node.hyp[data-status="confirmed"] { --c: var(--sev-critical); }
 .node.hyp[data-status="dropped"] { --c: var(--faint); opacity: .6; }
@@ -208,8 +208,8 @@
 /* ---------- semantic zoom ---------- */
 
 .z-far .node-detail, .z-far .node-foot, .z-far .node-top .kind, .z-mid .node-detail { display: none; }
-.z-far .node.comp .node-body, .z-far .node.card .node-body, .z-far .node.sticky .node-body { justify-content: center; align-items: center; text-align: center; }
-.z-far .node.comp .node-title, .z-far .node.card .node-title { font-size: calc(15px * var(--lbl)); -webkit-line-clamp: 2; }
+.z-far .node.comp .node-body, .z-far .node.lane-card .node-body, .z-far .node.sticky .node-body { justify-content: center; align-items: center; text-align: center; }
+.z-far .node.comp .node-title, .z-far .node.lane-card .node-title { font-size: calc(15px * var(--lbl)); -webkit-line-clamp: 2; }
 .z-far .node.comp[data-state="untouched"] .fill { background: rgba(110, 110, 125, .10); }
 .z-far .node.comp[data-state="reviewed"] .fill { background: color-mix(in srgb, var(--c) 24%, transparent); }
 .z-far .node.comp[data-state="flagged"] .fill { background: color-mix(in srgb, var(--c) 34%, transparent); }
@@ -219,7 +219,7 @@
 .z-far .node.sticky .node-title { font-size: calc(14px * var(--lbl)); -webkit-line-clamp: 3; }
 .node-body { overflow: hidden; }
 .node-title, .node-detail { flex: none; }
-.z-near .node.comp .node-detail, .z-near .node.card .node-detail { -webkit-line-clamp: 2; }
+.z-near .node.comp .node-detail, .z-near .node.lane-card .node-detail { -webkit-line-clamp: 2; }
 .z-far .node.summary .sum-foot { display: none; }
 .z-far .node.summary .sum-label { font-size: 30px; }
 .z-far .node.summary .sum-label .icon { width: 28px; height: 28px; }

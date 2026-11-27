@@ -84,7 +84,18 @@ export function createMap({ stage, world, edges, nodes, markers, expandLayer }) 
       add({ key: `lane-h:${t.id}`, type: 'lane', label: 'hypotheses', x: hx, y: fy, w: LANE.w, h: 0 });
       add({ key: `lane-f:${t.id}`, type: 'lane', label: 'findings', x: fxl, y: fy, w: LANE.w, h: 0 });
       th.forEach((y, i) => add({ key: y.id, type: 'hyp', item: y, x: hx, y: fy + i * (LANE.hyp + LANE.gap), w: LANE.w, h: LANE.hyp }));
-      tf.forEach((y, i) => add({ key: y.id, type: 'find', item: y, x: fxl, y: fy + i * (LANE.find + LANE.gap), w: LANE.w, h: LANE.find }));
+      // Place each finding level with what it came from, so arrows stay short and do not cross.
+      const anchorY = (f) => {
+        const src = byItem.get(f.hypothesisId) || byItem.get(f.componentId);
+        return src ? src.y : Infinity;
+      };
+      let nextFree = fy;
+      tf.slice().sort((a, b) => anchorY(a) - anchorY(b) || findSort(a, b)).forEach((y) => {
+        const want = anchorY(y);
+        const top = Math.max(nextFree, Number.isFinite(want) ? want : nextFree);
+        add({ key: y.id, type: 'find', item: y, x: fxl, y: top, w: LANE.w, h: LANE.find });
+        nextFree = top + LANE.find + LANE.gap;
+      });
 
       const ta = asms.filter((y) => y.targetId === t.id);
       const perRow = Math.max(1, Math.floor((fw + STICKY.gap) / (STICKY.w + STICKY.gap)));
@@ -127,7 +138,7 @@ export function createMap({ stage, world, edges, nodes, markers, expandLayer }) 
     const el = h(`div.node.${n.type}`);
     if (['summary', 'frame', 'comp', 'hyp', 'find', 'add'].includes(n.type)) el.append(svgEl('svg', { class: 'sketch' }));
     if (n.type === 'comp' || n.type === 'hyp' || n.type === 'find') el.append(h('div.fill'), h('div.node-body'));
-    if (n.type === 'hyp' || n.type === 'find') el.classList.add('card');
+    if (n.type === 'hyp' || n.type === 'find') el.classList.add('lane-card');
     if (n.type === 'sticky') { el.append(h('div.paper'), h('div.node-body')); el.style.setProperty('--tilt', `${((hash(n.key) % 50) / 10 - 2.5).toFixed(1)}deg`); }
     if (n.type === 'summary') el.append(h('div.sum-body'));
     if (n.type === 'frame') el.append(h('div.frame-label'), h('div.frame-bar'), h('div.frame-tip'));
