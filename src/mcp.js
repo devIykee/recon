@@ -8,6 +8,8 @@
 
 import readline from 'node:readline';
 import { createClient, defaultUrl, ReconError } from './client.js';
+import fs from 'node:fs';
+import path from 'node:path';
 import { ENUMS } from './model.js';
 
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
@@ -364,6 +366,30 @@ export const TOOLS = [
     run: async (c, a) => c.checkFinding((await c.resolve(a.ref, 'finding')).item.id),
   },
   {
+    name: 'recon_write_report',
+    description: 'Write the disclosure report the way the human chose (combined: one document with a section per finding; separate: one report per finding). Only findings that pass every gate are included; the rest are listed with the reason. Refused until the human has chosen the shape: ask with recon_propose and options first. Never draft reports in chat.',
+    inputSchema: { type: 'object', properties: { path: str('Where to write, if the human has not set it (a folder for separate, a file for combined)') } },
+    run: async (c, a, ctx = {}) => {
+      if (a.path) { try { await c.setReport({ path: a.path }); } catch { /* path already set by the human */ } }
+      const r = await c.writeReport();
+      const where = r.config.path || a.path;
+      const summary = { shape: r.shape, included: r.included, excluded: r.excluded };
+      if (!ctx.canWriteFiles || !where) return { ...summary, files: r.files, note: where ? 'This connection cannot write files: save the files yourself.' : 'No path set: save these files where the human wants them, or ask for a path.' };
+      const base = path.resolve(ctx.cwd || process.cwd(), where);
+      const written = [];
+      if (r.shape === 'separate' || r.files.length > 1) {
+        fs.mkdirSync(base, { recursive: true });
+        for (const f of r.files) { const p = path.join(base, f.name); fs.writeFileSync(p, f.body); written.push(p); }
+      } else {
+        const target = /\.md$/i.test(base) ? base : path.join(base, r.files[0].name);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, r.files[0].body);
+        written.push(target);
+      }
+      return { ...summary, written };
+    },
+  },
+  {
     name: 'recon_playbook',
     description: 'The playbook for a protocol type: what usually goes wrong, plain explanations, and concrete checks with ids.',
     inputSchema: { type: 'object', properties: { protocolType: en('protocolType', 'Protocol type') }, required: ['protocolType'] },
@@ -406,7 +432,7 @@ function pick(obj, keys) {
 
 // The protocol itself, shared by the stdio server and the hub's HTTP /mcp endpoint.
 // Returns the JSON-RPC response for a request, or null for a notification.
-export async function dispatch(msg, { getClient, onInitialize } = {}) {
+export async function dispatch(msg, { getClient, onInitialize, ctx = {} } = {}) {
   if (!msg || msg.jsonrpc !== '2.0') return { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'invalid request' } };
   const { id, method, params } = msg;
   const isRequest = id !== undefined && id !== null;
@@ -436,7 +462,7 @@ export async function dispatch(msg, { getClient, onInitialize } = {}) {
         if (!tool) return fail(-32602, `unknown tool ${params?.name}`);
         try {
           const client = await getClient();
-          const result = await tool.run(client, params.arguments || {});
+          const result = await tool.run(client, params.arguments || {}, ctx);
           const content = [{ type: 'text', text: JSON.stringify(result, null, 1) }];
           if (tool.name !== 'recon_briefing' && tool.name !== 'recon_playbook') {
             try { const p = await client.pulse(); if (p?.pulse) content.push({ type: 'text', text: p.pulse }); } catch { /* the board can still answer next time */ }
@@ -488,6 +514,7 @@ export async function runMcp({ name = process.env.RECON_AGENT || 'agent', url, k
 
   async function handle(msg) {
     const res = await dispatch(msg, {
+      ctx: { canWriteFiles: true, cwd: process.cwd() },
       getClient: async () => { await hubReady; return client; },
       onInitialize: () => hubReady.then(() => client.heartbeat({}).catch(() => {})),
     });

@@ -286,6 +286,87 @@ export const CLASSES = {
       'permit is EIP-2612 compliant with nonces',
     ],
   },
+  'factory-auth': {
+    name: 'Factory privileges',
+    plain: 'A factory that deploys contracts often keeps powers over them: roles, operator approvals, ownership. If any public path makes the factory use those powers, everything it deployed is at risk.',
+    deeper: 'List every role, approval and ownership the factory holds over what it deploys (MINTER_ROLE, ENS operator, Safe owner). Then hunt the trigger: a callback, multicall payload or public function that makes the factory issue the privileged call. A power with no trigger is a capability, not a bug.',
+    checks: [
+      'Every power the factory keeps over deployed contracts is listed',
+      'No public function, callback or forwarded calldata makes the factory use those powers',
+      'Deployed contracts cannot be initialized or re-initialized by anyone else',
+    ],
+  },
+  'leftover-roles': {
+    name: 'Leftover roles',
+    plain: 'Roles granted during deployment and never renounced. They look harmless until the holder can be made to act, or its key leaks.',
+    deeper: 'Diff granted roles against intended roles after deploy: deployer, factory, migration helpers, test accounts. Check whether renounce happened on-chain, not just in the script.',
+    checks: [
+      'Roles held on-chain match the documented intent',
+      'Deployer and helper roles were renounced on-chain',
+      'Each remaining privileged holder is a contract with no external trigger, or a key the team controls',
+    ],
+  },
+  initializer: {
+    name: 'Initialization',
+    plain: 'Contracts deployed as clones or proxies are set up by an initialize call. If someone else gets there first, or can call it twice, they own it.',
+    deeper: 'Check that initialize is called atomically with deployment, protected against re-entry, and that implementation contracts are locked.',
+    checks: [
+      'initialize runs in the same transaction as deployment',
+      'initialize cannot be called twice',
+      'The implementation contract is locked',
+    ],
+  },
+  'module-config': {
+    name: 'Safe / Zodiac module wiring',
+    plain: 'DAOs built on Safe modules depend on how the modules are wired: who the owner is, cooldowns and timeouts, which oracle or arbitrator decides. A weak setting can let someone pass a transaction the members never approved.',
+    deeper: 'For each module: owner (a dead owner is good, an EOA is not), cooldown and expiration, bond sizes, arbitrator, question template, and whether the module can be disabled or replaced by itself.',
+    checks: [
+      'Module owner is dead or a trusted contract, not an EOA',
+      'Cooldown and expiration give members time to react',
+      'Bonds are high enough that a wrong answer is costly',
+      'Nothing lets a module re-enable, replace or bypass itself',
+    ],
+  },
+  'reality-oracle': {
+    name: 'Reality.eth answers',
+    plain: 'Reality.eth decides proposals by bonded answers. With a tiny bond, a short timeout or a weak arbitrator, a false answer can win.',
+    deeper: 'Check the minimum bond, the timeout, the arbitrator (and whether it is set at all), the question template, and whether answers on stale or malformed questions are executed.',
+    checks: [
+      'Minimum bond is meaningful relative to what an answer can move',
+      'Arbitrator is set and trustworthy',
+      'Question text binds the exact transaction to execute',
+    ],
+  },
+  'ens-operator': {
+    name: 'ENS names and operators',
+    plain: 'ENS approvals and subdomains can be squatted or reassigned. An operator approval over a parent name gives power over every subname.',
+    deeper: 'Check operator approvals on parent names, who can create or overwrite subnames, resolver records (setAddr) that point users somewhere else, and NameWrapper fuses.',
+    checks: [
+      'Operators over parent names are known and have no external trigger',
+      'Unused subname labels cannot be claimed by strangers',
+      'Resolver records cannot be redirected by strangers',
+    ],
+  },
+  'nft-custody': {
+    name: 'NFT custody',
+    plain: 'Vaults and DAOs that hold NFTs must only release them on the right path. Sweep functions, receive hooks and transfers out are where they leak.',
+    deeper: 'Map every path an NFT can leave custody: sweeps, rescues, buyouts, module transactions. Check onERC721Received for side effects and reentrancy.',
+    checks: [
+      'Every path an NFT can leave custody is listed and gated',
+      'Sweep and rescue functions cannot take custodied NFTs',
+      'onERC721Received has no exploitable side effects',
+    ],
+  },
+  'buyout-accounting': {
+    name: 'Buyout and redemption accounting',
+    plain: 'Buyouts and redemptions split proceeds among holders. Errors let someone redeem twice, redeem at the wrong price, or strand funds.',
+    deeper: 'Follow proceeds from buyout to every holder: pricing, partial fills, refunds, and what happens to tokens transferred mid-buyout.',
+    checks: [
+      'Each holder can redeem once, at the right price',
+      'Failed or cancelled buyouts refund correctly',
+      'Transfers during a buyout cannot double-count',
+    ],
+  },
 };
 
 // ---------- playbooks ----------
@@ -350,6 +431,30 @@ export const PLAYBOOKS = {
     summary: 'Pools user deposits into strategies and issues shares. Money is lost through share-price manipulation, harvest MEV, or strategy accounting gaps.',
     startHere: 'Start with how shares are minted on the very first deposit, then how a harvest updates totalAssets.',
     classes: ['share-inflation', 'rounding', 'slippage-mev', 'reentrancy', 'oracle-manipulation', 'weird-tokens', 'access-control', 'arbitrary-call'],
+  },
+  factory: {
+    name: 'Factory / deployer',
+    summary: 'Deploys and configures other contracts. Money is lost when the factory keeps powers over what it deploys and something can make it use them.',
+    startHere: 'List every role, approval and ownership the factory keeps over deployed contracts, then hunt for anything that triggers it.',
+    classes: ['factory-auth', 'leftover-roles', 'initializer', 'access-control', 'arbitrary-call', 'upgradeability'],
+  },
+  'dao-module': {
+    name: 'DAO on Safe modules',
+    summary: 'A Safe controlled by modules (Zodiac, Reality.eth, governors). Money is lost when module wiring lets a transaction pass that members never approved.',
+    startHere: 'For each module, write down owner, cooldown, timeout, bond and arbitrator, then ask what a stranger can push through.',
+    classes: ['module-config', 'reality-oracle', 'governance-takeover', 'timelock', 'leftover-roles', 'access-control'],
+  },
+  'nft-custody': {
+    name: 'NFT custody / fractional',
+    summary: 'Holds NFTs for a group, often with buyouts or redemptions. Money is lost when NFTs leave custody on an unintended path or proceeds are split wrong.',
+    startHere: 'Map every path an NFT can leave custody, then follow buyout proceeds to each holder.',
+    classes: ['nft-custody', 'buyout-accounting', 'reentrancy', 'arbitrary-call', 'access-control', 'rounding'],
+  },
+  naming: {
+    name: 'Naming (ENS)',
+    summary: 'Issues and manages names. Value is lost when names, subnames or records can be taken or redirected.',
+    startHere: 'List operators and owners of every parent name, then who can create subnames and set records.',
+    classes: ['ens-operator', 'access-control', 'leftover-roles', 'signature-replay'],
   },
   other: {
     name: 'General',
@@ -422,6 +527,27 @@ export const COMMON_ASSUMPTIONS = {
     ['invariant', 'State is updated before any external call or callback'],
     ['economic', 'Harvest swaps cannot be sandwiched for profit'],
   ],
+  factory: [
+    ['trust', 'The factory never uses the powers it keeps over what it deploys'],
+    ['invariant', 'Deployer and helper roles are renounced after setup'],
+    ['input', 'Deployed contracts are initialized in the same transaction'],
+  ],
+  'dao-module': [
+    ['trust', 'The module owner is dead, so nobody can reconfigure it'],
+    ['economic', 'Bonds are large enough that nobody answers falsely'],
+    ['trust', 'Members watch proposals within the cooldown'],
+    ['external', 'The arbitrator resolves disputes honestly and in time'],
+  ],
+  'nft-custody': [
+    ['invariant', 'NFTs only leave custody through an approved buyout or vote'],
+    ['input', 'Only standard ERC721/1155 tokens are deposited'],
+    ['economic', 'Buyout prices reflect what holders agreed to'],
+  ],
+  naming: [
+    ['trust', 'Operators over the parent name never act on their own'],
+    ['invariant', 'Only intended parties can create subnames'],
+    ['external', 'Users verify the resolved address before sending funds'],
+  ],
   other: [
     ['trust', 'Admin and privileged roles are trusted and their keys are safe'],
     ['input', 'Inputs are validated at the boundary'],
@@ -467,13 +593,30 @@ export function playbook(type) {
   };
 }
 
+// A target can stack playbooks (e.g. factory + dao-module + naming) and ignore classes that do not apply.
+export function playbookFor(target) {
+  const types = [...new Set([target?.protocolType || 'other', ...((target?.playbooks) || [])])].filter((t) => PLAYBOOKS[t]);
+  const ignored = new Set(target?.ignoredClasses || []);
+  const parts = types.map((t) => playbook(t));
+  const seen = new Set();
+  const classes = [];
+  for (const pb of parts) for (const c of pb.classes) if (!seen.has(c.id) && !ignored.has(c.id)) { seen.add(c.id); classes.push(c); }
+  const asm = [];
+  const seenA = new Set();
+  for (const pb of parts) for (const a of pb.commonAssumptions) if (!seenA.has(a.text)) { seenA.add(a.text); asm.push(a); }
+  return {
+    type: types.join('+'), types, name: parts.map((p) => p.name).join(' + '), summary: parts.map((p) => p.summary).join(' '),
+    startHere: parts.map((p) => p.startHere).join(' '), classes, commonAssumptions: asm, ignored: [...ignored],
+  };
+}
+
 export function allPlaybooks() {
   return Object.keys(PLAYBOOKS).map((t) => ({ type: t, name: PLAYBOOKS[t].name, summary: PLAYBOOKS[t].summary }));
 }
 
 // Checklist for a component, derived from its target's playbook.
 export function checklistFor(target, component) {
-  const pb = playbook(target?.protocolType);
+  const pb = playbookFor(target);
   const done = component?.checklist || {};
   return pb.classes.map((cls) => ({
     classId: cls.id,
@@ -596,7 +739,7 @@ export function suggest(state, { limit = 10 } = {}) {
     if (c.reviewState !== 'flagged' || hypByComponent.has(c.id)) continue;
     push({
       id: sid('flag-to-hyp', c.id), rule: 'flagged-no-hypothesis', action: 'note', itemId: c.id, itemKind: 'component',
-      score: 48 + PRIORITY_BONUS[c.priority || 'normal'],
+      score: 72 + PRIORITY_BONUS[c.priority || 'normal'],
       title: `Turn the flag on ${c.name} into a hypothesis`,
       why: 'Something smelled here, but nobody wrote down what. A hypothesis makes it testable.',
     });
@@ -607,7 +750,7 @@ export function suggest(state, { limit = 10 } = {}) {
     if (a.state !== 'assumed' || a.verification !== 'unverified') continue;
     push({
       id: sid('challenge', a.id), rule: 'unverified-assumption', action: 'challenge', itemId: a.id, itemKind: 'assumption',
-      score: 42 + PRIORITY_BONUS[a.priority || 'normal'],
+      score: (a.origin === 'developer' ? 58 : 46) + PRIORITY_BONUS[a.priority || 'normal'],
       title: `Challenge: ${short(a.text)}`,
       why: 'This is still being taken for granted. If it is wrong, everything resting on it is too.',
     });
@@ -626,6 +769,34 @@ export function suggest(state, { limit = 10 } = {}) {
     }
   }
 
+  // capabilities waiting on a trigger, and findings with unfinished cards
+  for (const h of Object.values(items.hypothesis)) {
+    if (h.exploitStage !== 'capability' || h.status === 'dropped') continue;
+    push({
+      id: sid('trigger', h.id), rule: 'capability-no-trigger', action: 'cover', itemId: h.id, itemKind: 'hypothesis',
+      score: 64 + PRIORITY_BONUS[h.priority || 'normal'],
+      title: `Hunt the trigger: ${short(h.text)}`,
+      why: 'The power exists but nothing shows a public path that makes it fire. Find the trigger, or record why there is none.',
+    });
+  }
+  for (const f of Object.values(items.finding)) {
+    const missing = ['attacker', 'reachability', 'bound', 'liveFunds', 'alreadyReported', 'verificationMethod'].filter((k) => !f[k]);
+    if (!missing.length) continue;
+    push({
+      id: sid('card', f.id), rule: 'finding-card', action: 'verify', itemId: f.id, itemKind: 'finding',
+      score: 66 + (f.severity === 'critical' ? 10 : f.severity === 'high' ? 5 : 0),
+      title: `Finish the confirmation card for "${short(f.title)}"`,
+      why: `Missing: ${missing.join(', ')}. Without them the severity is a guess and the report is easy to reject.`,
+    });
+  }
+  for (const l of Object.values(items.lead || {})) {
+    if (l.state !== 'open' || l.value !== 'high') continue;
+    push({
+      id: sid('lead', l.id), rule: 'open-lead', action: 'cover', itemId: l.id, itemKind: 'lead',
+      score: 52, title: `Open thread: ${short(l.text)}`, why: l.why || 'Marked high value and not done yet.',
+    });
+  }
+
   // findings without repro
   for (const f of Object.values(items.finding)) {
     if (!['recon', 'testing'].includes(f.stage) || f.repro) continue;
@@ -641,7 +812,7 @@ export function suggest(state, { limit = 10 } = {}) {
   for (const t of Object.values(targets)) {
     const comps = Object.values(items.component).filter((c) => c.targetId === t.id && isReviewable(c));
     if (!comps.length || (t.phase || 'mapping') === 'mapping') continue;
-    const pb = playbook(t.protocolType);
+    const pb = playbookFor(t);
     const hyps = Object.values(items.hypothesis).filter((h) => h.targetId === t.id);
     for (const cls of pb.classes.slice(0, 5)) {
       const touched = comps.some((c) => Object.entries(c.checklist || {}).some(([k, v]) => k.startsWith(`${cls.id}.`) && v.state !== 'unchecked'))
@@ -649,7 +820,7 @@ export function suggest(state, { limit = 10 } = {}) {
       if (touched) continue;
       push({
         id: sid('class', t.id, cls.id), rule: 'playbook-gap', action: 'cover', itemId: t.id, itemKind: 'target',
-        score: 34 + PRIORITY_BONUS[t.priority || 'normal'] - pb.classes.indexOf(cls) * 2,
+        score: 24 + PRIORITY_BONUS[t.priority || 'normal'] - pb.classes.indexOf(cls) * 2,
         title: `Look for ${cls.name.toLowerCase()} in ${t.name}`,
         why: `A usual suspect for ${pb.name.toLowerCase()} protocols that nobody has checked yet. ${cls.plain}`,
         classId: cls.id,
@@ -691,13 +862,14 @@ export function briefing(state, agentId) {
     .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 10)
     .map((p) => ({ id: p.id, text: p.text, state: p.state }));
   const targets = Object.values(items.target).map((t) => {
-    const pb = playbook(t.protocolType);
+    const pb = playbookFor(t);
     const phase = t.phase || 'mapping';
     const comps = Object.values(items.component).filter((c) => c.targetId === t.id);
     const linked = new Set(Object.values(items.relation || {}).filter((r) => r.targetId === t.id).flatMap((r) => [r.from, r.to]));
     return {
       unconnected: comps.filter((c) => !linked.has(c.id)).map((c) => c.name),
-      id: t.id, name: t.name, chain: t.chain, protocolType: t.protocolType, priority: t.priority,
+      id: t.id, name: t.name, chain: t.chain, protocolType: t.protocolType, playbooks: pb.types, priority: t.priority,
+      scope: { inScope: t.inScope || undefined, outOfScope: t.outOfScope || undefined, alreadyReported: (t.alreadyReported || []).length ? t.alreadyReported : undefined, disclosureChannel: t.disclosureChannel || undefined, severityScale: t.severityScale || undefined, bountyRules: t.bountyRules || undefined },
       phase, phaseGoal: PHASES[phase], progress: phaseStatus(state, t.id),
       map: {
         components: comps.map((c) => ({ id: c.id, name: c.name, type: c.type, summary: c.summary || '' })),

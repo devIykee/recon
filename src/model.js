@@ -9,7 +9,7 @@ export const ENUMS = Object.freeze({
   agentStatus: ['active', 'idle', 'stuck', 'offline'],
   protocolType: [
     'lending', 'amm', 'perps', 'bridge', 'staking', 'nft-market',
-    'governance', 'oracle', 'token', 'vault', 'other',
+    'governance', 'oracle', 'token', 'vault', 'factory', 'dao-module', 'nft-custody', 'naming', 'other',
   ],
   componentKind: ['contract', 'function', 'module', 'endpoint', 'storage', 'config', 'actor', 'external', 'other'],
   relationKind: ['calls', 'delegates', 'inherits', 'reads', 'writes', 'transfers', 'mints', 'owns', 'configures', 'trusts', 'other'],

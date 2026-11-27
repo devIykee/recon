@@ -60,12 +60,17 @@ export function mustDo(state, agentId, now = Date.now()) {
   for (const t of Object.values(items.target)) {
     const phase = t.phase || 'mapping';
     const ps = phaseStatus(state, t.id);
+    if (phase === 'mapping' && !t.inScope && !t.outOfScope && !t.scope) add('scope', t, `record the program's scope for "${t.name}": in scope, out of scope, already-reported issues, disclosure channel, severity scale and rules (one per submission?)`, 'recon_update on the target: inScope, outOfScope, alreadyReported, disclosureChannel, severityScale, bountyRules');
     if (phase === 'mapping') add('phase', t, `map "${t.name}" (${ps.components} parts, ${ps.relations} connections so far), then move it to assumptions`, 'recon_map, recon_phase');
     else if (phase === 'assumptions') add('phase', t, `record what "${t.name}"'s developers assume (${ps.developerAssumptions} so far), then move to hunting`, 'recon_add_assumption origin=developer, recon_phase');
   }
 
   const report = state.project.report || {};
   const reportable = Object.values(items.finding).filter((f) => !cardGaps(f).length);
+  const lastFindingChange = Math.max(0, ...Object.values(items.finding).map((f) => f.updatedAt));
+  if (reportable.length && report.shape && (!report.last || report.last.at < lastFindingChange)) {
+    add('report', null, `findings changed since the report was last written: rewrite the ${report.shape} report${report.path ? ` at ${report.path}` : ''}`, 'recon_write_report');
+  }
   if (reportable.length && !report.shape) {
     add('report', null, `${reportable.length} finding(s) are ready: ask the human how they want the report (one combined document, or one per finding) and where to write it, instead of drafting in chat`, 'recon_propose with options ["combined", "separate"]');
   }

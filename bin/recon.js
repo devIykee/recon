@@ -48,6 +48,8 @@ write (as the human, or as an agent with --as NAME)
   recon add chain <title> --part <id> --part <id> --glue same-tx|same-caller|config+code|social+code
                     --result "..." [--severity S] [--permissionless]
   recon ready <finding>                 re-run every gate: card, evidence, severity, test, duplicates
+  recon report [--shape combined|separate] [--path P] [--include id,id] [--write]
+                                        the disclosure report: only findings that pass every gate
   recon propose <text> [--option "A" --option "B"] [--rationale ...]
       any add takes --evidence "ref" or --evidence "ref|what it shows" (repeatable)
   recon coverage <component> <untouched|scanning|reviewed|flagged> [--reasoning ...] [--evidence ...]
@@ -558,6 +560,31 @@ async function start() {
   out(r, () => (r.existing ? `already working on "${r.project.name}"` : `started "${r.project.name}". add the target next: recon add target "<name>" --type <protocol type>`));
 }
 
+async function report() {
+  const api = client();
+  const cfg = {};
+  if (flags.shape) cfg.shape = flags.shape;
+  if (typeof flags.path === 'string') cfg.path = flags.path;
+  if (flags.include) cfg.includeIds = String(flags.include).split(',').map((x) => x.trim()).filter(Boolean);
+  let r = Object.keys(cfg).length ? await api.setReport(cfg) : await api.report();
+  if (flags.write) {
+    r = await api.writeReport();
+    const where = r.config.path;
+    if (!where) throw new ReconError(2, 'no report path: pass --path <file or folder>');
+    const base = path.resolve(where);
+    const written = [];
+    if (r.files.length > 1) { fs.mkdirSync(base, { recursive: true }); for (const f of r.files) { fs.writeFileSync(path.join(base, f.name), f.body); written.push(path.join(base, f.name)); } }
+    else { const target = /\.md$/i.test(base) ? base : path.join(base, r.files[0].name); fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, r.files[0].body); written.push(target); }
+    r.written = written;
+  }
+  out(r, () => [
+    `${bold('report')}  shape ${r.config.shape || COLORS.flagged('not chosen')}  path ${r.config.path || dim('not set')}`,
+    '', bold(`included (${r.included.length})`), ...r.included.map((f) => `  ${tint(f.severity).padEnd(tty ? 18 : 9)} ${f.title}`),
+    '', bold(`left out (${r.excluded.length})`), ...r.excluded.map((f) => `  ${f.title}\n    ${dim(f.reasons.join('; '))}`),
+    ...(r.written ? ['', ...r.written.map((p) => `wrote ${p}`)] : []),
+  ].join('\n'));
+}
+
 async function ready() {
   const api = client();
   const f = (await api.resolve(need(pos.join(' '), 'finding id or title'), 'finding')).item;
@@ -627,7 +654,7 @@ const COMMANDS = {
   steers, ack: () => steerVerb('ack'), address: () => steerVerb('address'), steer,
   verify: () => verdict('verified'), dispute: () => verdict('disputed'), unverify: () => verdict('unverified'),
   accept: () => decide('accept'), decline: () => decide('decline'),
-  setup, agent: agentCmd, start, relate, phase, ready, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
+  setup, agent: agentCmd, start, relate, phase, ready, report, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
 };
 
 async function main() {

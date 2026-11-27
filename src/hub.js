@@ -18,6 +18,8 @@ import { DemoAgent } from './demo.js';
 import { Engagements } from './engagements.js';
 import { mustDo, pulse, beforeYouStop, whereWeLeftOff } from './proactive.js';
 import { cardGaps, severityProblem, evidenceGaps, duplicateOf, reportedMatch } from './quality.js';
+import { buildReport } from './report.js';
+import { playbookFor } from './knowledge.js';
 import { watchSource } from './dropin.js';
 import { loadConfig, ROOT } from './config.js';
 import { createClient } from './client.js';
@@ -276,6 +278,41 @@ export function createHub(overrides = {}) {
       beforeYouStop: beforeYouStop(t.store.state, id),
       whereWeLeftOff: whereWeLeftOff(t.store.state, id),
     };
+  });
+
+  // ---------- the report slot ----------
+
+  route('GET', '/api/report', ({ t }) => buildReport(t.store.state));
+
+  route('PATCH', '/api/report', ({ t, body, who }) => {
+    const cur = t.store.state.project.report || {};
+    const patch = {};
+    if (who === 'human') {
+      for (const k of ['shape', 'path', 'includeIds']) if (body?.[k] !== undefined) patch[k] = body[k];
+    } else {
+      if (body?.shape !== undefined || body?.includeIds !== undefined) throw new HttpError(403, 'the report shape and which findings go in are the human\'s call: ask with recon_propose and options');
+      if (body?.path !== undefined && cur.path) throw new HttpError(403, `the report already has a path (${cur.path}); ask the human to change it`);
+      if (body?.path !== undefined) patch.path = body.path;
+    }
+    if (patch.shape !== undefined && !['combined', 'separate', ''].includes(patch.shape)) throw new HttpError(400, 'shape must be combined or separate');
+    t.store.setProject({ report: patch }, who);
+    t.store.log({ by: who, action: 'updated', kind: 'project', summary: `report set to ${t.store.state.project.report.shape || 'undecided'}${t.store.state.project.report.path ? ` at ${t.store.state.project.report.path}` : ''}` });
+    return buildReport(t.store.state);
+  });
+
+  route('POST', '/api/report/write', ({ t, who }) => {
+    const cfg = t.store.state.project.report || {};
+    if (!cfg.shape) throw new HttpError(409, 'the human has not chosen the report shape yet. Ask with recon_propose and options ["combined: one document, a section per finding", "separate: one report per finding"], then write.');
+    const r = buildReport(t.store.state);
+    t.store.setProject({ report: { last: { at: Date.now(), by: who, shape: r.shape, files: r.files.map((f) => f.name), included: r.included.map((f) => f.id) } } }, who);
+    t.store.log({ by: who, action: 'note', kind: 'project', summary: `wrote the ${r.shape} report: ${r.included.length} finding(s), ${r.excluded.length} left out` });
+    return r;
+  });
+
+  route('GET', '/api/targets/:id/playbook', ({ t, params }) => {
+    const target = t.store.get('target', params.id);
+    if (!target) throw new HttpError(404, `target "${params.id}" not found`);
+    return playbookFor(target);
   });
 
   route('GET', '/api/pulse', ({ t, who }) => {

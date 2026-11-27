@@ -459,6 +459,14 @@ export class Store extends EventEmitter {
     if (typeof fields.name === 'string' && fields.name.trim()) p.name = fields.name.trim().slice(0, 120);
     if (typeof fields.example === 'boolean') p.example = fields.example;
     if (Array.isArray(fields.dismissed)) p.dismissed = fields.dismissed.slice(-500);
+    if (fields.report && typeof fields.report === 'object') {
+      const r = { ...(p.report || {}) };
+      if (['combined', 'separate', ''].includes(fields.report.shape)) r.shape = fields.report.shape;
+      if (typeof fields.report.path === 'string') r.path = fields.report.path.slice(0, 500);
+      if (Array.isArray(fields.report.includeIds)) r.includeIds = fields.report.includeIds.map(String).slice(0, 200);
+      if (fields.report.last) r.last = fields.report.last;
+      p.report = r;
+    }
     this.rev++;
     this.emit('project', p);
     this.save();
