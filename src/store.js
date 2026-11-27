@@ -292,6 +292,11 @@ export class Store extends EventEmitter {
         this.emitChange('upsert', 'hypothesis', h, null);
       }
     }
+    // An agent that starts scanning unowned surface claims it, so others do not duplicate it.
+    if (kind === 'component' && changed.includes('reviewState') && item.reviewState === 'scanning' && !item.owner && !isHuman(author) && this.get('agent', author)) {
+      item.owner = author;
+      item._f.owner = { at: this.tick(), by: author };
+    }
     // An agent claiming focus on a component marks it as being scanned.
     if (kind === 'agent' && changed.includes('focusItem') && item.focusItem) {
       const c = this.get('component', item.focusItem);

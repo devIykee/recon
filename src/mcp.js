@@ -1,0 +1,375 @@
+// recon as an MCP server (stdio, JSON-RPC 2.0, newline-delimited).
+//
+// It is a thin client of the hub, so many agents can share one board. If no hub
+// is running on the default local address, it starts one in-process (serving the
+// web ui too), so `recon mcp` on its own is a complete, zero-config setup.
+//
+// stdout carries the protocol; every log line goes to stderr.
+
+import readline from 'node:readline';
+import { createClient, defaultUrl, ReconError } from './client.js';
+import { ENUMS } from './model.js';
+
+const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
+
+const evidenceSchema = {
+  type: 'array',
+  description: 'What backs the claim. Each entry: the file:line, function, tx hash or link you looked at, and what it shows.',
+  items: {
+    type: 'object',
+    properties: {
+      ref: { type: 'string', description: 'e.g. "contracts/Vault.sol:120", "Vault.withdraw()", a tx hash, a url' },
+      note: { type: 'string', description: 'What this shows, in a sentence' },
+      kind: { type: 'string', enum: ENUMS.evidenceKind },
+    },
+    required: ['ref'],
+  },
+};
+
+const str = (description, extra = {}) => ({ type: 'string', description, ...extra });
+const en = (name, description) => ({ type: 'string', enum: ENUMS[name], description });
+
+export const TOOLS = [
+  {
+    name: 'recon_briefing',
+    description: 'Start here, and call again whenever you finish a task. Returns the human\'s open steers for you (act on these first), claims of yours the human disputed, components you own, untouched attack surface, the protocol playbook for each target (usual exploit classes and checks), suggested next moves, and the rules of the board.',
+    inputSchema: { type: 'object', properties: {} },
+    run: (c) => c.briefing(),
+  },
+  {
+    name: 'recon_list',
+    description: 'List items of one kind, optionally filtered by a field (e.g. kind=component, targetId=..., reviewState=untouched).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['target', 'component', 'assumption', 'hypothesis', 'finding', 'steer', 'proposal', 'agent'] },
+        filter: { type: 'object', description: 'field -> value, exact match', additionalProperties: { type: 'string' } },
+      },
+      required: ['kind'],
+    },
+    run: async (c, a) => (await c.list(a.kind, a.filter || {})).map(compact),
+  },
+  {
+    name: 'recon_get',
+    description: 'Get one item by id or by name, with its full evidence, history, and (for components) the playbook checklist with check ids.',
+    inputSchema: { type: 'object', properties: { ref: str('An id like "cp_..." or a name like "Vault.withdraw()"') }, required: ['ref'] },
+    run: async (c, a) => {
+      const { kind, item } = await c.resolve(a.ref);
+      return c.get(kind, item.id);
+    },
+  },
+  {
+    name: 'recon_add_target',
+    description: 'Add a target (a protocol or system under research) and optionally its attack surface in one call. protocolType selects the playbook.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: str('e.g. "Acme Lending"'),
+        protocolType: en('protocolType', 'Drives the playbook of usual exploit classes'),
+        chain: str('e.g. "mainnet"'),
+        description: str('One paragraph on what it does'),
+        scope: str('In-scope paths or contracts'),
+        components: {
+          type: 'array',
+          items: { type: 'object', properties: { name: str('e.g. "Vault.withdraw()"'), type: en('componentKind', 'What kind of piece'), location: str('path:line') }, required: ['name'] },
+        },
+      },
+      required: ['name'],
+    },
+    run: async (c, a) => {
+      const { components = [], ...fields } = a;
+      const t = await c.create('target', fields);
+      const comps = [];
+      for (const comp of components) comps.push(compact(await c.create('component', { ...comp, targetId: t.id })));
+      return { target: compact(t), components: comps };
+    },
+  },
+  {
+    name: 'recon_add_component',
+    description: 'Add a piece of attack surface (contract, function, endpoint...) to a target.',
+    inputSchema: {
+      type: 'object',
+      properties: { targetId: str('Target id or name'), name: str('e.g. "Vault.withdraw()"'), type: en('componentKind', 'What kind of piece'), location: str('path:line') },
+      required: ['targetId', 'name'],
+    },
+    run: async (c, a) => {
+      const t = await c.resolve(a.targetId, 'target');
+      return compact(await c.create('component', { ...a, targetId: t.item.id }));
+    },
+  },
+  {
+    name: 'recon_coverage',
+    description: 'Record review progress on a component: set its review state (untouched, scanning, reviewed, flagged), your reasoning, evidence, and checklist results. Set "scanning" when you start, "reviewed" or "flagged" when done. Always attach evidence.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        component: str('Component id or name'),
+        reviewState: en('reviewState', 'untouched | scanning | reviewed (nothing found) | flagged (something smells)'),
+        reasoning: str('What you checked and concluded'),
+        evidence: evidenceSchema,
+        checklist: { type: 'object', description: 'checklist id (from recon_get) -> checked | na | unchecked', additionalProperties: { type: 'string', enum: ENUMS.checkState } },
+      },
+      required: ['component'],
+    },
+    run: async (c, a) => {
+      const { item } = await c.resolve(a.component, 'component');
+      const fields = pick(a, ['reviewState', 'reasoning', 'evidence', 'checklist']);
+      const out = await c.update('component', item.id, fields);
+      if (a.reviewState === 'scanning') await c.heartbeat({ focus: `Reviewing ${item.name}`, focusItem: item.id }).catch(() => {});
+      return compact(out);
+    },
+  },
+  {
+    name: 'recon_add_assumption',
+    description: 'Record something you are taking for granted, so the human can challenge it. Include why it seems true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: str('e.g. "Only the owner can call setFee()"'), targetId: str('Target id'), componentId: str('Component id'),
+        scope: str('Where it applies'), rationale: str('Why it seems true'), evidence: evidenceSchema,
+      },
+      required: ['text'],
+    },
+    run: async (c, a) => compact(await c.create('assumption', await resolveRefs(c, a))),
+  },
+  {
+    name: 'recon_add_hypothesis',
+    description: 'Record a suspected bug you are about to test. Update it later with recon_update (status confirmed or dropped + dropReason).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: str('The suspected bug in one sentence'), targetId: str('Target id'), componentId: str('Component id'),
+        bugClass: str('An exploit class id from the playbook, e.g. "reentrancy"'), confidence: en('confidence', 'low | med | high'),
+        reasoning: str('Why you suspect it'), evidence: evidenceSchema,
+      },
+      required: ['text'],
+    },
+    run: async (c, a) => compact(await c.create('hypothesis', await resolveRefs(c, a))),
+  },
+  {
+    name: 'recon_add_finding',
+    description: 'Record a confirmed vulnerability with evidence and, ideally, a reproduction. Link the hypothesis it came from.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: str('One line'), severity: en('severity', 'critical | high | medium | low | info'),
+        targetId: str('Target id'), componentId: str('Component id'), hypothesisId: str('Source hypothesis id'),
+        bugClass: str('e.g. "rounding"'), stage: en('findingStage', 'Usually "testing" until reproduced'),
+        notes: str('Impact and root cause'), repro: str('Steps or test that reproduces it'), evidence: evidenceSchema,
+      },
+      required: ['title'],
+    },
+    run: async (c, a) => compact(await c.create('finding', await resolveRefs(c, a))),
+  },
+  {
+    name: 'recon_update',
+    description: 'Update fields on any item you own: e.g. hypothesis status (testing | confirmed | dropped) and dropReason, assumption state (assumed | verified | invalidated), finding stage or repro, confidence. You cannot set verification or priority; those belong to the human.',
+    inputSchema: {
+      type: 'object',
+      properties: { ref: str('Item id or name'), fields: { type: 'object', description: 'field -> new value' } },
+      required: ['ref', 'fields'],
+    },
+    run: async (c, a) => {
+      const { kind, item } = await c.resolve(a.ref);
+      return compact(await c.update(kind, item.id, a.fields));
+    },
+  },
+  {
+    name: 'recon_evidence',
+    description: 'Attach evidence to any item (component, assumption, hypothesis, finding). Use this to strengthen a claim the human disputed.',
+    inputSchema: {
+      type: 'object',
+      properties: { ref: str('Item id or name'), evidence: evidenceSchema },
+      required: ['ref', 'evidence'],
+    },
+    run: async (c, a) => {
+      const { kind, item } = await c.resolve(a.ref);
+      const out = await c.evidence(kind, item.id, a.evidence);
+      return { id: out.id, evidence: out.evidence.length };
+    },
+  },
+  {
+    name: 'recon_steer',
+    description: 'Respond to a human steer. Acknowledge as soon as you see it (state=acknowledged), then mark it addressed with a short response when done. Steers never require you to stop current work.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        steerId: str('The steer id from recon_briefing'),
+        state: { type: 'string', enum: ['acknowledged', 'addressed'] },
+        response: str('What you did or found, in a sentence or two'),
+      },
+      required: ['steerId', 'state'],
+    },
+    run: async (c, a) => compact(await c.steer(a.steerId, a.state === 'addressed' ? 'address' : 'ack', a.response)),
+  },
+  {
+    name: 'recon_propose',
+    description: 'Propose your next move to the human for a quick yes/no instead of going idle or going rogue. Check recon_briefing later: accepted proposals come back as acknowledged steers.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: str('What you want to do next'), rationale: str('Why it is worth it'),
+        itemId: str('The item it concerns, if any'), steerKind: en('steerKind', 'The kind of work it is'),
+      },
+      required: ['text'],
+    },
+    run: async (c, a) => {
+      const fields = { ...a };
+      if (a.itemId) { const r = await c.resolve(a.itemId); fields.itemId = r.item.id; fields.itemKind = r.kind; }
+      return compact(await c.create('proposal', fields));
+    },
+  },
+  {
+    name: 'recon_focus',
+    description: 'Tell the board what you are doing right now. Shows as your live status and moves your marker on the map.',
+    inputSchema: {
+      type: 'object',
+      properties: { focus: str('e.g. "Tracing withdraw() for reentrancy"'), item: str('Component or item id/name you are on'), status: en('agentStatus', 'Set "stuck" to ask for help') },
+      required: ['focus'],
+    },
+    run: async (c, a) => {
+      const fields = { focus: a.focus };
+      if (a.status) fields.status = a.status;
+      if (a.item) fields.focusItem = (await c.resolve(a.item)).item.id;
+      return compact(await c.heartbeat(fields));
+    },
+  },
+  {
+    name: 'recon_claim',
+    description: 'Claim components so other agents do not duplicate your work. Claims fail for components another agent owns.',
+    inputSchema: { type: 'object', properties: { components: { type: 'array', items: { type: 'string' }, description: 'Component ids or names' } }, required: ['components'] },
+    run: async (c, a) => {
+      const ids = [];
+      for (const r of a.components) ids.push((await c.resolve(r, 'component')).item.id);
+      return c.claim(ids);
+    },
+  },
+  {
+    name: 'recon_playbook',
+    description: 'The playbook for a protocol type: what usually goes wrong, plain explanations, and concrete checks with ids.',
+    inputSchema: { type: 'object', properties: { protocolType: en('protocolType', 'Protocol type') }, required: ['protocolType'] },
+    run: (c, a) => c.playbook(a.protocolType),
+  },
+];
+
+const INSTRUCTIONS = `recon is a shared board where you and a human research vulnerabilities together.
+Start with recon_briefing. Acknowledge the human's steers right away (recon_steer), then work them.
+Record as you go: recon_coverage for what you reviewed, recon_add_assumption for what you take for granted,
+recon_add_hypothesis for suspected bugs, recon_add_finding once confirmed. Attach evidence (file:line, function,
+tx) to every claim; the human verifies or disputes claims and disputed ones come back to you.
+Use recon_focus to say what you are doing, and recon_propose when you are unsure what to do next.
+Never set verification or priority, and do not overwrite components another agent owns.`;
+
+function compact(it) {
+  if (!it || typeof it !== 'object') return it;
+  const { _f, ...rest } = it;
+  if (Array.isArray(rest.evidence)) rest.evidence = rest.evidence.map(({ ref, note, kind }) => ({ ref, note, kind }));
+  return rest;
+}
+
+// Agents often pass names instead of ids; resolve them, and infer the target from the component.
+async function resolveRefs(c, a) {
+  const out = { ...a };
+  const refs = { targetId: 'target', componentId: 'component', hypothesisId: 'hypothesis' };
+  for (const [field, kind] of Object.entries(refs)) {
+    if (out[field]) out[field] = (await c.resolve(out[field], kind)).item.id;
+  }
+  if (out.componentId && !out.targetId) {
+    const comp = await c.resolve(out.componentId, 'component');
+    out.targetId = comp.item.targetId;
+  }
+  return out;
+}
+
+function pick(obj, keys) {
+  return Object.fromEntries(keys.filter((k) => obj[k] !== undefined).map((k) => [k, obj[k]]));
+}
+
+export async function runMcp({ name = process.env.RECON_AGENT || 'agent', url, key, model, input = process.stdin, output = process.stdout, log = (...a) => console.error(...a), embed = true } = {}) {
+  const hubUrl = (url || defaultUrl()).replace(/\/$/, '');
+  let client = createClient({ url: hubUrl, key, agent: name, transport: 'mcp', model });
+  let embedded = null;
+
+  // Reach the hub, or start one in-process when running locally with defaults.
+  async function ensureHub() {
+    try { await client.health(); return; } catch (err) {
+      const local = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(hubUrl);
+      if (!embed || !local || url) { log(`recon mcp: ${err.message}`); return; }
+    }
+    const { createHub } = await import('./hub.js');
+    const port = Number(new URL(hubUrl).port || 4317);
+    embedded = createHub({ port, log });
+    await embedded.listen();
+    log(`recon mcp: started a local hub at ${embedded.url} (open it in a browser to watch)`);
+    client = createClient({ url: embedded.url, key, agent: name, transport: 'mcp', model });
+  }
+
+  const hubReady = ensureHub().catch((err) => log(`recon mcp: ${err.message}`));
+
+  const send = (msg) => output.write(`${JSON.stringify(msg)}\n`);
+  const reply = (id, result) => send({ jsonrpc: '2.0', id, result });
+  const fail = (id, code, message) => send({ jsonrpc: '2.0', id, error: { code, message } });
+
+  async function handle(msg) {
+    if (!msg || msg.jsonrpc !== '2.0') return;
+    const { id, method, params } = msg;
+    const isRequest = id !== undefined && id !== null;
+    try {
+      switch (method) {
+        case 'initialize': {
+          const asked = params?.protocolVersion;
+          const version = PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0];
+          reply(id, {
+            protocolVersion: version,
+            capabilities: { tools: { listChanged: false } },
+            serverInfo: { name: 'recon', version: '0.1.0' },
+            instructions: INSTRUCTIONS,
+          });
+          hubReady.then(() => client.heartbeat({}).catch(() => {}));
+          return;
+        }
+        case 'notifications/initialized':
+        case 'notifications/cancelled':
+          return;
+        case 'ping':
+          if (isRequest) reply(id, {});
+          return;
+        case 'tools/list':
+          reply(id, { tools: TOOLS.map(({ name: n, description, inputSchema }) => ({ name: n, description, inputSchema })) });
+          return;
+        case 'tools/call': {
+          await hubReady;
+          const tool = TOOLS.find((t) => t.name === params?.name);
+          if (!tool) { fail(id, -32602, `unknown tool ${params?.name}`); return; }
+          try {
+            const result = await tool.run(client, params.arguments || {});
+            reply(id, { content: [{ type: 'text', text: JSON.stringify(result, null, 1) }] });
+          } catch (err) {
+            const detail = err instanceof ReconError && err.details ? `\n${[].concat(err.details).join('\n')}` : '';
+            reply(id, { content: [{ type: 'text', text: `error: ${err.message}${detail}` }], isError: true });
+          }
+          return;
+        }
+        default:
+          if (isRequest) fail(id, -32601, `method not found: ${method}`);
+      }
+    } catch (err) {
+      if (isRequest) fail(id, -32603, err.message);
+    }
+  }
+
+  const rl = readline.createInterface({ input, crlfDelay: Infinity });
+  rl.on('line', (line) => {
+    if (!line.trim()) return;
+    let msg;
+    try { msg = JSON.parse(line); } catch { send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }); return; }
+    for (const m of Array.isArray(msg) ? msg : [msg]) handle(m);
+  });
+
+  return new Promise((resolve) => {
+    rl.on('close', async () => {
+      if (embedded) await embedded.close();
+      resolve();
+    });
+  });
+}
