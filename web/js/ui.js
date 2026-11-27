@@ -269,15 +269,22 @@ export function popover(anchor, content, { align = 'start', onClose } = {}) {
   const root = document.getElementById('popover-root');
   const el = h('div.popover', { role: 'menu' }, content);
   root.append(el);
+  // The text-size setting zooms popovers, and CSS zoom scales left/top too:
+  // measure what is really on screen and place it in the popover's own units.
+  const z = parseFloat(getComputedStyle(el).zoom) || 1;
   const r = anchor.getBoundingClientRect();
-  const w = el.offsetWidth;
-  const hgt = el.offsetHeight;
+  // offsetWidth ignores the pop-in animation's scale; times the zoom it is the size on screen
+  const w = el.offsetWidth * z;
+  const hgt = Math.min(el.offsetHeight * z, innerHeight - 16);
   let x = align === 'end' ? r.right - w : r.left;
   let y = r.bottom + 6;
   if (y + hgt > innerHeight - 8) y = Math.max(8, r.top - hgt - 6);
+  if (y + hgt > innerHeight - 8) y = Math.max(8, innerHeight - hgt - 8);
   x = Math.max(8, Math.min(innerWidth - w - 8, x));
-  el.style.left = `${x}px`;
-  el.style.top = `${y}px`;
+  el.style.maxHeight = `${(innerHeight - 16) / z}px`;
+  el.style.overflowY = 'auto';
+  el.style.left = `${x / z}px`;
+  el.style.top = `${y / z}px`;
   openPop = el;
   const off = (e) => {
     if (el.contains(e.target) || anchor.contains(e.target)) return;
