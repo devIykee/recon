@@ -1,5 +1,6 @@
 // recon web ui: wires the live state to the map, the boards and the side panel.
 
+import { applyTheme, currentThemeId, allThemes, addTheme, removeTheme, parseTheme, exportTheme, TOKENS } from './themes.js';
 import { h, icon, ICONS, setChildren, initTooltips, setGlossary, toast, menu, modal, confirmDialog, closePopover, topModal } from './ui.js';
 import { live, on, connect, list, byId, healthOf, agentIsWriting, authorName, post, patch, get, setKey } from './state.js';
 import { VIEWS } from './labels.js';
@@ -37,8 +38,7 @@ function theme() {
 }
 
 function setTheme(t) {
-  document.documentElement.dataset.theme = t;
-  try { localStorage.setItem('recon.theme', t); } catch { /* ignore */ }
+  applyTheme(t === 'light' ? 'light' : 'dark');
   paintTheme();
 }
 
@@ -49,7 +49,8 @@ function paintTheme() {
 try {
   const t = localStorage.getItem('recon.theme');
   if (t) document.documentElement.dataset.theme = t;
-  for (const k of ['headFont', 'bodyFont', 'textSize']) {
+  applyTheme(currentThemeId(), { save: false });
+  for (const k of ['headFont', 'bodyFont', 'textSize', 'density']) {
     const v = localStorage.getItem(`recon.${k}`);
     if (v) document.documentElement.dataset[k] = v;
   }
@@ -60,22 +61,62 @@ try {
 const APPEARANCE = [
   { key: 'headFont', label: 'Headings and names', help: 'Titles, card names and the map', options: [['', 'Hand-drawn', 'Excalifont'], ['clean', 'Clean', 'Inter'], ['serif', 'Serif', 'Georgia'], ['mono', 'Mono', 'JetBrains Mono']] },
   { key: 'bodyFont', label: 'Body text', help: 'Everything you read', options: [['', 'Inter', 'Inter'], ['system', 'Your system font', 'system-ui'], ['serif', 'Serif', 'Georgia'], ['mono', 'Mono', 'JetBrains Mono']] },
+  { key: 'density', label: 'Spacing', help: 'How tightly things sit together', options: [['', 'Compact', ''], ['comfortable', 'Comfortable', '']] },
   { key: 'textSize', label: 'Text size', help: 'Boards, side panel and windows', options: [['small', 'Small', ''], ['', 'Normal', ''], ['large', 'Large', ''], ['xl', 'Extra large', '']] },
 ];
 
+const DARK_PREVIEW = { bg: '#121212', island: '#232329', border: '#393844', text: '#ececf1', muted: '#a3a3ae', primary: '#a8a5ff', 'st-reviewed': '#51cf66', 'st-flagged': '#ff922b', 'sev-critical': '#ff6b6b' };
+const LIGHT_PREVIEW = { bg: '#ffffff', island: '#f4f4f8', border: '#e3e3ea', text: '#1b1b1f', muted: '#5d5d68', primary: '#6965db', 'st-reviewed': '#2f9e44', 'st-flagged': '#e8590c', 'sev-critical': '#e03131' };
+
 function openAppearance() {
   const root = document.documentElement;
-  const m = modal([]);
+  const m = modal([], { wide: true });
+  let adding = false;
+  const themeCard = (t) => {
+    const c = { ...(t.base === 'light' ? LIGHT_PREVIEW : DARK_PREVIEW), ...t.colors };
+    return h('div.theme-card', { 'aria-pressed': String(currentThemeId() === t.id) },
+      h('button.theme-pick', { type: 'button', on: { click: () => { applyTheme(t.id); paintTheme(); render(); } } },
+        h('span.theme-preview', { style: { background: c.bg } },
+          h('span.tp-island', { style: { background: c.island, borderColor: c.border } },
+            h('span.tp-line', { style: { background: c.text } }), h('span.tp-line.short', { style: { background: c.muted } }),
+            h('span.tp-dots', ...[c.primary, c['st-reviewed'], c['st-flagged'], c['sev-critical']].map((x) => h('i', { style: { background: x } }))))),
+        h('b', t.name), h('small', t.note || (t.base === 'light' ? 'Light' : 'Dark'))),
+      t.custom ? h('button.tool.sm.theme-x', { 'aria-label': `Remove ${t.name}`, 'data-tip': 'Remove', on: { click: () => { removeTheme(t.id); paintTheme(); render(); } } }, icon('x')) : null);
+  };
+  const addBox = () => {
+    const ta = h('textarea.textarea.mono', { rows: 9, placeholder: '{ "name": "My theme", "base": "dark", "colors": { "bg": "#101418", "island": "#1a2027", "primary": "#7aa2f7" } }' });
+    const file = h('input', { type: 'file', accept: '.json,application/json', hidden: true });
+    file.addEventListener('change', async () => { if (file.files[0]) ta.value = await file.files[0].text(); });
+    return h('div.theme-add',
+      h('p.help', 'Paste a theme as JSON, or import a .json file. "base" is dark or light; "colors" can set any of: ', h('span.mono', TOKENS.join(', ')), '. Colors you leave out come from the base.'),
+      ta, file,
+      h('div.modal-actions',
+        h('button.btn.btn-sm', { on: { click: () => file.click() } }, icon('upload'), 'Import file'),
+        h('button.btn.btn-sm', { on: { click: () => { ta.value = exportTheme(); } } }, icon('copy'), 'Start from the current theme'),
+        h('span.spacer'),
+        h('button.btn.btn-sm', { on: { click: () => { adding = false; render(); } } }, 'Cancel'),
+        h('button.btn.btn-sm.btn-primary', {
+          on: {
+            click: () => {
+              try { const t = addTheme(parseTheme(ta.value)); applyTheme(t.id); paintTheme(); adding = false; render(); toast(`Added the theme "${t.name}".`, 'ok'); } catch (err) { toast(err.message, 'error'); }
+            },
+          },
+        }, icon('check'), 'Add theme')));
+  };
   const render = () => m.set(
     h('h2', 'Appearance'),
     h('p.lead', 'Pick what is easiest on your eyes. It is saved in this browser.'),
+    h('div.field', h('label', 'Theme', h('span.help', ' · colors for everything'), h('span.spacer'),
+      adding ? null : h('button.btn.btn-xs', { on: { click: () => { adding = true; render(); } } }, icon('plus'), 'Add your own')),
+    h('div.theme-grid', ...allThemes().map(themeCard)),
+    adding ? addBox() : null),
     ...APPEARANCE.map((g) => h('div.field', h('label', g.label, h('span.help', ` · ${g.help}`)),
       h('div.font-choices', ...g.options.map(([v, name, family]) => h('button.font-choice', {
         type: 'button', 'aria-pressed': String((root.dataset[g.key] || '') === v),
         on: { click: () => { if (v) root.dataset[g.key] = v; else delete root.dataset[g.key]; try { if (v) localStorage.setItem(`recon.${g.key}`, v); else localStorage.removeItem(`recon.${g.key}`); } catch { /* ignore */ } render(); } },
       }, h('b', { style: g.key === 'textSize' ? { fontSize: { small: '14px', '': '17px', large: '20px', xl: '23px' }[v] } : { fontFamily: family ? `'${family}', ${family === 'Georgia' ? 'serif' : family === 'system-ui' ? 'sans-serif' : 'inherit'}` : 'inherit' } }, g.key === 'textSize' ? 'Aa' : 'Recon 0x5f'), h('small', name)))))),
     h('div.modal-actions',
-      h('button.btn', { on: { click: () => { for (const g of APPEARANCE) { delete root.dataset[g.key]; try { localStorage.removeItem(`recon.${g.key}`); } catch { /* ignore */ } } render(); } } }, 'Reset'),
+      h('button.btn', { on: { click: () => { applyTheme('dark'); paintTheme(); for (const g of APPEARANCE) { delete root.dataset[g.key]; try { localStorage.removeItem(`recon.${g.key}`); } catch { /* ignore */ } } render(); } } }, 'Reset'),
       h('span.spacer'),
       h('button.btn.btn-primary', { on: { click: () => m.close() } }, 'Done')),
   );
@@ -263,7 +304,7 @@ function openMenu(anchor) {
     { text: 'Hunts…', icon: 'clock', shortcut: 'E', action: openEngagements },
     { text: 'Report…', icon: 'file', shortcut: 'R', action: openReport },
     { text: 'Skills…', icon: 'book', shortcut: 'K', action: () => openSkills() },
-    { text: 'Appearance: fonts and text size…', icon: 'edit', action: openAppearance },
+    { text: 'Appearance: theme, fonts, size…', icon: 'sun', action: openAppearance },
     { text: 'Connect an agent', icon: 'plug', shortcut: 'C', action: () => openConnect() },
     { text: 'Export project (JSON)', icon: 'download', action: exportProject },
     { text: 'Import project…', icon: 'upload', action: importProject },
