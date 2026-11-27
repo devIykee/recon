@@ -147,7 +147,7 @@ function handle(msg) {
 }
 
 function normalize(s) {
-  for (const k of ['agent', 'target', 'component', 'assumption', 'hypothesis', 'finding', 'steer', 'proposal']) {
+  for (const k of ['agent', 'target', 'component', 'relation', 'assumption', 'hypothesis', 'finding', 'steer', 'proposal']) {
     s.items[k] = s.items[k] || {};
   }
   s.activity = s.activity || [];
@@ -159,7 +159,7 @@ function normalize(s) {
 // ---------- selectors ----------
 
 export const KIND_LABEL = {
-  agent: 'agent', target: 'target', component: 'component', assumption: 'assumption',
+  agent: 'agent', target: 'target', component: 'component', relation: 'connection', assumption: 'assumption',
   hypothesis: 'hypothesis', finding: 'finding', steer: 'steer', proposal: 'proposal',
 };
 
@@ -177,6 +177,11 @@ export function byId(id) {
 
 export function titleOf(item) {
   if (!item) return '';
+  if (item.kind === 'relation') {
+    const a = live.state?.items.component[item.from];
+    const b = live.state?.items.component[item.to];
+    return `${a?.name || '?'} ${item.type} ${b?.name || '?'}${item.label ? ` (${item.label})` : ''}`;
+  }
   return item.name || item.title || item.text || item.note || item.id;
 }
 
@@ -204,8 +209,10 @@ export function activeAgents() {
   return list('agent').filter((a) => healthOf(a.id).status !== 'offline');
 }
 
+export const isReviewable = (c) => c && c.type !== 'actor' && c.type !== 'external';
+
 export function coverage(targetId) {
-  const comps = list('component', (c) => !targetId || c.targetId === targetId);
+  const comps = list('component', (c) => (!targetId || c.targetId === targetId) && isReviewable(c));
   const counts = { untouched: 0, scanning: 0, reviewed: 0, flagged: 0 };
   for (const c of comps) counts[c.reviewState] = (counts[c.reviewState] || 0) + 1;
   const total = comps.length;

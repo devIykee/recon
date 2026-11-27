@@ -64,6 +64,7 @@ export const ICONS = {
   copy: P('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>'),
   zap: P('<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>'),
   stop: P('<rect x="6" y="6" width="12" height="12" rx="2"/>'),
+  graph: P('<rect x="2.5" y="9.5" width="6" height="5" rx="1.2"/><rect x="15.5" y="3.5" width="6" height="5" rx="1.2"/><rect x="15.5" y="15.5" width="6" height="5" rx="1.2"/><path d="M8.5 12h3.5c1 0 1.5-.5 1.5-1.5V7.5c0-1 .5-1.5 1.5-1.5h.5M12 12h1.5V16.5c0 1 .5 1.5 1.5 1.5h.5"/>'),
 };
 
 export function icon(name, cls = '') {
@@ -89,7 +90,13 @@ export function h(sel, attrs, ...children) {
       if (v === undefined || v === null || v === false) continue;
       if (k === 'on') { for (const [ev, fn] of Object.entries(v)) el.addEventListener(ev, fn); }
       else if (k === 'class') el.className = `${el.className} ${v}`.trim();
-      else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+      else if (k === 'style' && typeof v === 'object') {
+        // custom properties (--c) must go through setProperty; plain assignment drops them
+        for (const [sk, sv] of Object.entries(v)) {
+          if (sv === undefined || sv === null) continue;
+          if (sk.startsWith('--')) el.style.setProperty(sk, sv); else el.style[sk] = sv;
+        }
+      }
       else if (k === 'dataset') Object.assign(el.dataset, v);
       else if (k === 'html') el.innerHTML = v;
       else if (k === 'text') el.textContent = v;

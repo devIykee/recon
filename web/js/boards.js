@@ -9,6 +9,7 @@ import {
 import { createDetail } from './detail.js';
 import { avatar, authorAvatar, openSteerComposer, recipientPicker } from './steer.js';
 import { bus, loadPlaybook } from './bus.js';
+import { createArchitecture } from './architecture.js';
 
 export function createBoards(root) {
   let current = null;
@@ -18,6 +19,7 @@ export function createBoards(root) {
   const openPlaybooks = new Set();
   let inner = null;
   let lastView = null;
+  const arch = createArchitecture();
 
   function mount(view) {
     if (lastView !== view) {
@@ -35,6 +37,7 @@ export function createBoards(root) {
   function render() {
     if (!current || !live.state) return;
     switch (current) {
+      case 'architecture': arch.render(inner); break;
       case 'coverage': renderCoverage(); break;
       case 'assumptions': renderColumns('assumption', 'state', ASM_STATE, assumptionsHead()); break;
       case 'hypotheses': renderColumns('hypothesis', 'status', HYP_STATUS, hypothesesHead()); break;
@@ -172,7 +175,7 @@ export function createBoards(root) {
         style: { flexGrow: c.counts[s], background: REVIEW[s].color, opacity: s === 'untouched' ? 0.35 : 1 }, 'data-tip': `${REVIEW[s].label}: ${c.counts[s]}`,
       })));
       renderPlaybook(el.querySelector('.playbook'), t);
-      const comps = list('component', (x) => x.targetId === t.id && (filters.coverage === 'all' || x.reviewState === filters.coverage));
+      const comps = list('component', (x) => x.targetId === t.id && x.type !== 'actor' && x.type !== 'external' && (filters.coverage === 'all' || x.reviewState === filters.coverage));
       const tiles = el.querySelector('.tiles');
       cardKeyed(tiles, comps, (x, tile) => {
         tile.dataset.state = x.reviewState;
@@ -246,7 +249,8 @@ export function createBoards(root) {
         if (kind === 'assumption') {
           el.classList.add('sticky-card');
           return h('div.card-main',
-            h('div.card-top', h('span', it.scope ? truncate(it.scope, 40) : 'assumption'), h('span.right', steerBadge(it), verBadge(it), prioBadge(it))),
+            h('div.card-top', h(`span.chip.origin-${it.origin || 'agent'}`, it.origin === 'developer' ? 'developers assume' : 'agent assumes'),
+              it.category && it.category !== 'other' ? h('span.chip', it.category) : null, h('span.right', steerBadge(it), verBadge(it), prioBadge(it))),
             h('div.card-title.hand', it.text),
             it.rationale ? h('div.card-sub', it.rationale) : null,
             foot(it, [h('button.btn.btn-xs', { 'data-tip': STEER.challenge.hint, on: { click: (e) => openSteerComposer(e.currentTarget, { item: it, action: 'challenge' }) } }, icon('challenge'), 'Challenge')]));
@@ -450,6 +454,13 @@ export function createBoards(root) {
     mount,
     render,
     open(id) {
+      const it = byId(id);
+      if (current === 'architecture' && it && (it.kind === 'component' || it.kind === 'relation' || it.kind === 'assumption')) {
+        arch.pick(it.targetId, id);
+        render();
+        requestAnimationFrame(() => root.querySelector(`[data-target="${it.targetId}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+        return;
+      }
       openId = id;
       render();
       requestAnimationFrame(() => root.querySelector(`[data-key="${id}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));

@@ -12,6 +12,7 @@ import { REVIEW, SEVERITY, STAGES, HYP_STATUS, PROTOCOL_ICON, PRIORITY } from '.
 import { createDetail } from './detail.js';
 import { avatar, authorAvatar } from './steer.js';
 import { bus } from './bus.js';
+import { phaseStepper } from './architecture.js';
 
 const SUM = { w: 330, h: 196, gap: 28 };
 const COMP = { w: 224, h: 124, gap: 24 };
@@ -42,7 +43,7 @@ export function createMap({ stage, world, edges, nodes, markers, expandLayer }) 
     const byItem = new Map();
     const add = (n) => { out.push(n); if (n.item) byItem.set(n.item.id, n); return n; };
     const targets = list('target');
-    const comps = list('component');
+    const comps = list('component', (c) => c.type !== 'actor' && c.type !== 'external');
     const hyps = list('hypothesis');
     const finds = list('finding');
     const asms = list('assumption');
@@ -265,7 +266,7 @@ export function createMap({ stage, world, edges, nodes, markers, expandLayer }) 
     el.dataset.state = a.state;
     el.dataset.ver = a.verification;
     setChildren(el.querySelector('.node-body'),
-      h('div.node-top', h('span.kind', a.state === 'assumed' ? 'assumption' : a.state === 'verified' ? 'holds' : 'broken'), h('span.badges', ...badges(a))),
+      h('div.node-top', h('span.kind', `${a.origin === 'developer' ? 'devs assume' : 'assumption'}${a.state === 'verified' ? ' · holds' : a.state === 'invalidated' ? ' · broken' : ''}`), h('span.badges', ...badges(a))),
       h('div.node-title', a.text),
       h('div.node-foot', authorAvatar(a.createdBy), a.scope ? truncate(a.scope, 30) : ''));
   }
@@ -275,7 +276,8 @@ export function createMap({ stage, world, edges, nodes, markers, expandLayer }) 
     const cov = coverage(t.id);
     setChildren(el.querySelector('.frame-label'),
       h('span.name', `${PROTOCOL_ICON[t.protocolType] || ''} ${t.name}`),
-      h('span.meta', h('span.pill', t.protocolType), t.chain ? h('span', t.chain) : null, h('span', `${cov.pct}% covered`), ...badges(t)));
+      h('span.meta', h('span.pill', t.protocolType), t.chain ? h('span', t.chain) : null, h('span', `${cov.pct}% covered`), ...badges(t)),
+      phaseStepper(t, { compact: true }));
     setChildren(el.querySelector('.frame-bar'), ...['flagged', 'reviewed', 'scanning', 'untouched'].map((s) => h('span', {
       style: { flexGrow: cov.counts[s] || 0, background: REVIEW[s].color, opacity: s === 'untouched' ? 0.35 : 1 },
       'data-tip': `${REVIEW[s].label}: ${cov.counts[s] || 0}`,

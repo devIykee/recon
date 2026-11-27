@@ -81,19 +81,24 @@ export async function newItem(kind, defaults = {}) {
         field('Name', input('name', { placeholder: 'Vault.withdraw()', autofocus: true, mono: true })),
         h('div.row-fields',
           field('Target', select('targetId', list('target').map((t) => [t.id, t.name]), firstTarget)),
-          field('Type', select('type', ['function', 'contract', 'module', 'endpoint', 'storage', 'config', 'other'].map((x) => [x, x]), 'function'))),
+          field('Type', select('type', [['function', 'function'], ['contract', 'contract'], ['actor', 'actor (a person or role)'], ['external', 'external (token, oracle, protocol)'], ['module', 'module'], ['endpoint', 'endpoint'], ['storage', 'storage'], ['config', 'config'], ['other', 'other']], defaults.type || 'function'))),
+        field('Summary', input('summary', { placeholder: 'What it does, in one line' }), 'Shown on the architecture map.'),
         field('Location', input('location', { placeholder: 'contracts/Vault.sol:120', mono: true }), 'Optional. Where to find it.'),
       ];
       submit = (v) => {
         if (!v.targetId) throw new Error('Add a target first.');
+        if (v.type === 'actor' || v.type === 'external') v.reviewState = 'reviewed';
         return write.create('component', clean(v));
       };
       break;
     case 'assumption':
       title = 'Add an assumption';
-      lead = 'Something being taken for granted. Writing it down makes it challengeable.';
+      lead = 'Something being taken for granted: by the developers (their trust model, invariants, expected inputs) or by us. Writing it down makes it challengeable.';
       body = [
         field('The assumption', textarea('text', { placeholder: 'Only the owner can call setFee()', rows: 2 })),
+        h('div.row-fields',
+          field('Whose assumption', seg('origin', [['developer', 'The developers\''], ['agent', 'Ours']], defaults.origin || 'developer')),
+          field('Category', select('category', ['trust', 'invariant', 'input', 'external', 'economic', 'other'].map((x) => [x, x]), defaults.category || 'trust'))),
         h('div.row-fields',
           field('Target', select('targetId', targetOptions(), firstTarget)),
           field('Component', select('componentId', componentOptions(firstTarget), defaults.componentId || ''))),

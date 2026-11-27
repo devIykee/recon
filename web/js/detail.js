@@ -8,7 +8,7 @@
 import { h, icon, setChildren, timeEl, toast, confirmDialog, term, flash, menu } from './ui.js';
 import { live, write, list, byId, titleOf, authorName, historyOf } from './state.js';
 import {
-  REVIEW, SEVERITY, STAGES, HYP_STATUS, ASM_STATE, CONFIDENCE, VERIFICATION, PRIORITY,
+  RELATION, PHASES, ORIGIN, CATEGORY, REVIEW, SEVERITY, STAGES, HYP_STATUS, ASM_STATE, CONFIDENCE, VERIFICATION, PRIORITY,
   STEER, STEERS_FOR, STEER_STATE, KIND_ICON, EVIDENCE_ICON, PROTOCOL_ICON,
 } from './labels.js';
 import { openSteerComposer, authorAvatar } from './steer.js';
@@ -69,6 +69,8 @@ export function createDetail(item, { onClose, inMap = false } = {}) {
     if (it.kind === 'assumption') chips.push(stateLabel(ASM_STATE[it.state]));
     if (it.kind === 'finding') chips.push(stateLabel(SEVERITY[it.severity]), h('span.stage-chip', STAGES[it.stage]?.label));
     if (it.kind === 'target') chips.push(h('span.pill', PROTOCOL_ICON[it.protocolType] || '', ' ', it.protocolType));
+    if (it.kind === 'assumption') chips.push(h('span.pill', ORIGIN[it.origin || 'agent'].label));
+    if (it.kind === 'relation') chips.push(h('span.pill', { style: { color: (RELATION[it.type] || RELATION.other).color } }, (RELATION[it.type] || RELATION.other).label));
     if (it.priority && it.priority !== 'normal') chips.push(h(`span.badge.prio-${it.priority}`, icon(PRIORITY[it.priority].icon), PRIORITY[it.priority].label));
     const title = h('h3.detail-title', {
       contenteditable: 'true', spellcheck: 'false',
@@ -314,7 +316,7 @@ function stateLabel(meta) {
 }
 
 function titleField(kind) {
-  return { finding: 'title', hypothesis: 'text', assumption: 'text', proposal: 'text', steer: 'note' }[kind] || 'name';
+  return { finding: 'title', hypothesis: 'text', assumption: 'text', proposal: 'text', steer: 'note', relation: 'label' }[kind] || 'name';
 }
 
 export function steerMini(s) {
@@ -383,13 +385,16 @@ function propsFor(it, save) {
       const agents = list('agent');
       return [
         row(h('span', { 'data-term': 'review state', class: 'term' }, 'Review state'), select(it.reviewState, Object.keys(REVIEW), s('reviewState'), { labels: labelsOf(REVIEW) }), it, 'reviewState'),
-        row('Type', select(it.type, ['contract', 'function', 'module', 'endpoint', 'storage', 'config', 'other'], s('type')), it, 'type'),
+        row('Type', select(it.type, ['contract', 'function', 'module', 'endpoint', 'storage', 'config', 'actor', 'external', 'other'], s('type')), it, 'type'),
+        row('Summary', input(it.summary, s('summary'), { placeholder: 'What it does, one line' }), it, 'summary'),
         row('Location', input(it.location, s('location'), { placeholder: 'path/to/File.sol:120' }), it, 'location'),
         row('Owner', select(it.owner || '', ['', ...agents.map((a) => a.id)], s('owner'), { labels: { '': 'Nobody', ...Object.fromEntries(agents.map((a) => [a.id, a.name])) } }), it, 'owner'),
       ];
     }
     case 'assumption':
       return [
+        row('Whose', select(it.origin || 'agent', Object.keys(ORIGIN), s('origin'), { labels: labelsOf(ORIGIN) }), it, 'origin'),
+        row('Category', select(it.category || 'other', Object.keys(CATEGORY), s('category')), it, 'category'),
         row('State', select(it.state, Object.keys(ASM_STATE), s('state'), { labels: labelsOf(ASM_STATE) }), it, 'state'),
         row('Scope', input(it.scope, s('scope'), { placeholder: 'Where this applies' }), it, 'scope'),
         row('Component', select(it.componentId || '', componentOptions(it.targetId), s('componentId'), { labels: componentLabels() }), it, 'componentId'),
@@ -411,8 +416,19 @@ function propsFor(it, save) {
         row('Chain', input(it.chain, s('chain'), { placeholder: 'e.g. mainnet' }), it, 'chain'),
         row('Component', select(it.componentId || '', componentOptions(it.targetId), s('componentId'), { labels: componentLabels() }), it, 'componentId'),
       ];
+    case 'relation': {
+      const comps = list('component', (c) => c.targetId === it.targetId);
+      const names = Object.fromEntries(comps.map((c) => [c.id, c.name]));
+      return [
+        row('From', select(it.from, comps.map((c) => c.id), s('from'), { labels: names }), it, 'from'),
+        row('How', select(it.type, Object.keys(RELATION), s('type'), { labels: Object.fromEntries(Object.entries(RELATION).map(([k, m]) => [k, m.label])) }), it, 'type'),
+        row('To', select(it.to, comps.map((c) => c.id), s('to'), { labels: names }), it, 'to'),
+        row('Detail', input(it.label, s('label'), { placeholder: 'e.g. transferFrom user' }), it, 'label'),
+      ];
+    }
     case 'target':
       return [
+        row('Phase', select(it.phase || 'mapping', PHASES.map((p) => p.id), s('phase'), { labels: Object.fromEntries(PHASES.map((p) => [p.id, p.label])) }), it, 'phase'),
         row('Protocol type', select(it.protocolType, ['lending', 'amm', 'perps', 'bridge', 'staking', 'nft-market', 'governance', 'oracle', 'token', 'vault', 'other'], s('protocolType')), it, 'protocolType'),
         row('Chain', input(it.chain, s('chain'), { placeholder: 'e.g. mainnet' }), it, 'chain'),
         row('Scope', input(it.scope, s('scope'), { placeholder: 'In-scope paths or contracts' }), it, 'scope'),
