@@ -147,6 +147,7 @@ function setView(v) {
   view = v;
   const isBoard = v !== 'map';
   app.classList.toggle('view-board', isBoard);
+  app.classList.toggle('view-sysmap', v === 'architecture');
   $('board').hidden = !isBoard;
   map.hide(isBoard);
   if (isBoard) { map.collapse(); boards.mount(v); } else { boards.unmount(); map.render(); }
@@ -358,7 +359,7 @@ async function openHelp() {
     h('p.lead', 'You and your agents share one board. Agents do the tireless scanning and record what they find with evidence. You verify or dispute their claims and steer them with signals they pick up without stopping. Every change shows up live, attributed to whoever made it.'),
     h('div.row-fields', { style: { alignItems: 'start' } },
       h('div', h('div.sec-label', 'Keys'), h('div.kbd-grid',
-        h('kbd', '1–7'), h('span', 'Map, Architecture, Coverage, Assumptions, Hypotheses, Findings, Agents'),
+        h('kbd', '1–7'), h('span', 'Map, Coverage, System map (full screen), Assumptions, Hypotheses, Findings, Agents'),
         h('kbd', 'F'), h('span', 'Fit the whole map'),
         h('kbd', '+ / −'), h('span', 'Zoom'),
         h('kbd', 'Space'), h('span', 'Hold and drag to pan'),
@@ -573,6 +574,7 @@ addEventListener('keydown', (e) => {
     closePopover();
     if (m) { m.close(); return; }
     if (map.expandedId) { map.collapse(); return; }
+    if (view === 'architecture' && (document.fullscreenElement || boards.sysmap.release())) return;
     if (view !== 'map') { setView('map'); return; }
     return;
   }
@@ -580,9 +582,9 @@ addEventListener('keydown', (e) => {
   const v = VIEWS.find((x) => x.key === e.key);
   if (v) { setView(v.id); return; }
   switch (e.key) {
-    case 'f': case 'F': if (view === 'map') map.fit(); break;
-    case '+': case '=': if (view === 'map') map.camera.zoomBy(1.25); break;
-    case '-': case '_': if (view === 'map') map.camera.zoomBy(0.8); break;
+    case 'f': case 'F': if (view === 'map') map.fit(); else if (view === 'architecture') boards.sysmap.fit(); break;
+    case '+': case '=': if (view === 'map') map.camera.zoomBy(1.25); else if (view === 'architecture') boards.sysmap.zoomBy(1.25); break;
+    case '-': case '_': if (view === 'map') map.camera.zoomBy(0.8); else if (view === 'architecture') boards.sysmap.zoomBy(0.8); break;
     case '[': setSidebar(!sidebarOpen); break;
     case 'c': case 'C': openConnect(); break;
     case 'e': case 'E': openEngagements(); break;

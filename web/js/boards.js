@@ -481,6 +481,7 @@ export function createBoards(root) {
       requestAnimationFrame(() => root.querySelector(`[data-key="${id}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
     },
     get view() { return current; },
+    sysmap: arch,
     unmount() { current = null; lastView = null; openId = null; root.replaceChildren(); details.clear(); },
   };
 }

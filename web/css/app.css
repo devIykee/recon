@@ -613,5 +613,3 @@ code, .mono { font-family: var(--font-mono); font-size: .9em; }
 :root:not([data-density="comfortable"]) .panel-sub { margin: -3px 2px 8px; }
 :root:not([data-density="comfortable"]) .field { margin-bottom: 11px; }
 :root:not([data-density="comfortable"]) .modal { padding: 20px 22px; }
-:root:not([data-density="comfortable"]) .sysmap { height: calc(100vh - 110px); gap: 6px; }
-:root:not([data-density="comfortable"]) .app.has-banner .sysmap { height: calc(100vh - 156px); }
