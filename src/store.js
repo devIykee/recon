@@ -137,10 +137,8 @@ export class Store extends EventEmitter {
     if (clean.checklist) item.checklist = mergeByKey({}, clean.checklist, author, ts);
     for (const key of Object.keys(clean)) item._f[key] = { at: ts, by: author };
     this.state.items[kind][itemId] = item;
-    const activity = this.log({
-      by: author, action: kind === 'agent' ? 'joined' : kind === 'steer' ? 'steered' : kind === 'proposal' ? 'proposed' : 'added',
-      kind, itemId, summary: summarize('added', kind, item),
-    }, ts);
+    const action = kind === 'agent' ? 'joined' : kind === 'steer' ? 'steered' : kind === 'proposal' ? 'proposed' : 'added';
+    const activity = this.log({ by: author, action, kind, itemId, summary: summarize(action, kind, item) }, ts);
     this.afterWrite(kind, item, Object.keys(clean), author, { created: true });
     if (!silent) this.emitChange('upsert', kind, item, activity);
     this.save();
@@ -170,7 +168,7 @@ export class Store extends EventEmitter {
       item._f[key] = { at: ts, by: author };
       changed.push(key);
     }
-    if (!changed.length) return item;
+    if (!changed.length) { this.noteNoop(author); return item; }
     item.updatedAt = Math.max(item.updatedAt, ts);
     item.lastTouchedBy = author;
     const action = actionFor(kind, changed, item, before);
@@ -247,6 +245,16 @@ export class Store extends EventEmitter {
     agent.lastSeen = now;
     if (dirty) { agent.updatedAt = this.tick(); this.emitChange('upsert', 'agent', agent, null); this.save(); }
     return agent;
+  }
+
+  // Writes that change nothing are a looping signal: an agent repeating itself.
+  noteNoop(author) {
+    if (isHuman(author)) return;
+    const agent = this.get('agent', author);
+    if (!agent) return;
+    const now = Date.now();
+    agent.noops = (agent.noops || []).filter((t) => now - t < 120_000).concat(now).slice(-20);
+    agent.lastSeen = now;
   }
 
   markWrite(author) {
