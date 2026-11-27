@@ -370,6 +370,8 @@ src/setup.js        one-line setup for every agent cli; update.js for recon upda
 web/                the ui: no build step, plain ES modules
 ```
 
+Want to help? Start with [CONTRIBUTING.md](CONTRIBUTING.md).
+
 The visual language borrows from [Excalidraw](https://excalidraw.com) and uses
 its Excalifont (OFL, bundled with Inter and JetBrains Mono in `web/fonts`).
 
