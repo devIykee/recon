@@ -265,7 +265,7 @@ code, .mono { font-family: var(--font-mono); font-size: .9em; }
   font-size: 12px; font-weight: 600; color: var(--text); border-radius: 7px;
 }
 .zoom-value:hover { background: var(--island-3); }
-.app.view-board .hud-bottom-left { display: none; }
+.app.view-board .hud-bottom-left, .app.view-board .hud-bottom-right { display: none; }
 
 .hint {
   position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
@@ -304,10 +304,12 @@ code, .mono { font-family: var(--font-mono); font-size: .9em; }
 .app.sidebar-open .sidebar { transform: none; }
 .tabs { display: flex; gap: 2px; padding: 6px; border-bottom: 1px solid var(--border); flex: none; }
 .tab {
-  flex: 1; height: 32px; border: 0; border-radius: 7px; background: transparent;
-  font-size: 12.5px; font-weight: 600; color: var(--muted);
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  flex: 1 1 auto; min-width: 0; height: 32px; border: 0; border-radius: 7px; background: transparent;
+  font-size: 12px; font-weight: 600; color: var(--muted); padding: 0 6px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap;
 }
+.tab .icon { width: 15px; height: 15px; }
+.tabs .tab:not([aria-selected="true"]) .icon { display: none; }
 .tab:hover { background: var(--island-3); color: var(--text); }
 .tab[aria-selected="true"] { background: var(--primary-bg); color: var(--primary); }
 .tab .n {

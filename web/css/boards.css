@@ -32,8 +32,11 @@
 
 /* ---------- kanban columns ---------- */
 
-.columns { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(250px, 1fr); gap: 14px; align-items: start; overflow-x: auto; padding-bottom: 10px; }
-.columns.pipeline { grid-auto-columns: minmax(220px, 1fr); }
+/* flex, not grid: a column holding an open card widens instead of spilling over its neighbour */
+.columns { display: flex; gap: 14px; align-items: flex-start; overflow-x: auto; padding-bottom: 10px; }
+.columns > .column { flex: 1 1 250px; min-width: 240px; transition: flex-basis .25s var(--ease); }
+.columns.pipeline > .column { flex-basis: 220px; min-width: 210px; }
+.columns > .column:has(.card.open) { flex: 0 0 460px; }
 .column {
   background: color-mix(in srgb, var(--island) 55%, transparent);
   border-radius: 12px; padding: 10px; min-height: 160px;
@@ -47,7 +50,7 @@
 .column-head .sw { width: 10px; height: 10px; border-radius: 3px; background: var(--c); }
 .column-hint { font-size: 11.5px; color: var(--faint); margin: -6px 4px 10px; line-height: 1.35; }
 .column-list { display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
-.column:has(.card.open) .column-list { min-width: 430px; }
+
 
 /* ---------- cards ---------- */
 
@@ -435,6 +438,24 @@
 @media (max-width: 1100px) {
   .arch-grid { grid-template-columns: 1fr; }
 }
+
+/* ---------- plain-language story at the top of every detail ---------- */
+
+.story { padding: 12px 0 6px; }
+.story-text p { margin: 0 0 8px; font-size: 14px; line-height: 1.5; color: var(--text); }
+.story-text b { font-weight: 650; }
+.story-text code { font-size: 12px; background: var(--island-3); padding: 1px 5px; border-radius: 4px; }
+.story-status { display: flex; gap: 6px; align-items: baseline; font-size: 12.5px; line-height: 1.4; padding: 7px 10px; border-radius: 8px; margin: 4px 0 8px; }
+.story-status.ok { background: color-mix(in srgb, var(--ok) 12%, transparent); color: var(--ok); }
+.story-status.bad { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
+.story-status.warn { background: color-mix(in srgb, var(--warn) 12%, transparent); color: var(--warn); }
+.story-status.info { background: var(--primary-ghost); color: var(--primary); }
+.story-status.muted { background: var(--island-2); color: var(--muted); }
+.story-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+.more-toggle { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; border-top: 1px solid var(--border); background: transparent; color: var(--muted); font-size: 12px; font-weight: 600; padding: 10px 0 6px; text-align: left; }
+.more-toggle:hover { color: var(--text); }
+.more-toggle .icon { width: 14px; height: 14px; transition: transform .2s; }
+.more-toggle[aria-expanded="true"] .icon { transform: rotate(180deg); }
 
 /* ---------- for you, threads, cards ---------- */
 

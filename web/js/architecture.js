@@ -12,6 +12,7 @@ import { openSteerComposer, authorAvatar } from './steer.js';
 import { bus, loadPlaybook } from './bus.js';
 
 const NODE = { w: 200, h: 78, gapY: 34, gapX: 350, pad: 40 };
+const TIGHT_GAP = 250; // when there are few connections, columns sit closer
 
 export function phaseStepper(target, { compact = false } = {}) {
   const current = PHASES.findIndex((p) => p.id === (target.phase || 'mapping'));
@@ -73,16 +74,23 @@ function layout(comps, rels) {
     nodes.sort((a, b) => score(a) - score(b) || a.createdAt - b.createdAt);
     nodes.forEach((c, i) => row.set(c.id, i));
   }
-  const tallest = Math.max(1, ...layers.map((l) => cols.get(l).length));
+  // A layer with many parts becomes several side-by-side columns instead of one very tall one.
+  const MAX_PER_COL = 6;
+  const gapX = edges.length > comps.length / 3 ? NODE.gapX : TIGHT_GAP;
+  const physical = [];
+  for (const l of layers) {
+    const nodes = cols.get(l);
+    for (let i = 0; i < nodes.length; i += MAX_PER_COL) physical.push(nodes.slice(i, i + MAX_PER_COL));
+  }
+  const tallest = Math.max(1, ...physical.map((c) => c.length));
   const H = NODE.pad * 2 + tallest * NODE.h + (tallest - 1) * NODE.gapY;
   const pos = new Map();
-  layers.forEach((l, li) => {
-    const nodes = cols.get(l);
+  physical.forEach((nodes, ci) => {
     const colH = nodes.length * NODE.h + (nodes.length - 1) * NODE.gapY;
     const top = (H - colH) / 2;
-    nodes.forEach((c, i) => pos.set(c.id, { x: NODE.pad + li * NODE.gapX, y: top + i * (NODE.h + NODE.gapY), w: NODE.w, h: NODE.h }));
+    nodes.forEach((c, i) => pos.set(c.id, { x: NODE.pad + ci * gapX, y: top + i * (NODE.h + NODE.gapY), w: NODE.w, h: NODE.h }));
   });
-  const W = NODE.pad * 2 + Math.max(1, layers.length) * NODE.gapX - (NODE.gapX - NODE.w);
+  const W = NODE.pad * 2 + Math.max(1, physical.length) * gapX - (gapX - NODE.w);
   return { pos, edges, W, H };
 }
 
@@ -124,6 +132,16 @@ function diagram(target, onPick, picked) {
       on: { click: () => onPick(e.id) },
     }, text);
     labels.append(lab);
+  }
+  // Labels that land on top of each other (edges converging on one part) are nudged apart.
+  const placed = [...labels.children].map((el) => ({ el, x: parseFloat(el.style.left), y: parseFloat(el.style.top) })).sort((a, b) => a.y - b.y);
+  for (let i = 0; i < placed.length; i++) {
+    for (let j = 0; j < i; j++) {
+      const a = placed[j];
+      const b = placed[i];
+      if (Math.abs(a.x - b.x) < 150 && Math.abs(a.y - b.y) < 20) b.y = a.y + 20;
+    }
+    placed[i].el.style.top = `${placed[i].y}px`;
   }
   canvas.append(svg, labels);
   for (const c of comps) {
@@ -241,7 +259,7 @@ export function createArchitecture() {
           sc.scrollLeft = keepScroll;
           const canvas = sc.querySelector('.arch-canvas');
           requestAnimationFrame(() => {
-            const fit = Math.min(1, Math.max(0.55, (sc.clientWidth - 8) / canvas.offsetWidth));
+            const fit = Math.min(1, Math.max(0.45, (sc.clientWidth - 8) / canvas.offsetWidth));
             canvas.style.zoom = fit < 1 ? String(fit) : '';
           });
         }

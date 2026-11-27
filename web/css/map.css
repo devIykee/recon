@@ -49,7 +49,8 @@
 
 .node.summary { cursor: pointer; }
 .node.summary .sum-body { position: absolute; inset: 0; padding: 22px 26px; display: flex; flex-direction: column; justify-content: space-between; }
-.sum-label { font: 400 22px var(--font-hand); color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.sum-label { font: 400 22px var(--font-hand); color: var(--muted); display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.sum-label > span { overflow: hidden; text-overflow: ellipsis; }
 .sum-label .icon { width: 20px; height: 20px; }
 .sum-value { font: 400 64px/1 var(--font-hand); color: var(--text); display: flex; align-items: baseline; gap: 10px; }
 .sum-value small { font-size: 22px; color: var(--muted); }

@@ -95,6 +95,12 @@ export const TRANSPORT = {
   mcp: 'MCP', cli: 'CLI', api: 'HTTP', json: 'JSON file', demo: 'example', ui: 'browser',
 };
 
+export const PLAYBOOK_NAMES = {
+  lending: 'lending market', amm: 'AMM / DEX', perps: 'perpetuals', bridge: 'bridge', staking: 'staking', 'nft-market': 'NFT marketplace',
+  governance: 'governance', oracle: 'oracle', token: 'token', vault: 'vault', factory: 'factory', 'dao-module': 'DAO on Safe modules',
+  'nft-custody': 'NFT custody', naming: 'naming / ENS', other: 'protocol',
+};
+
 export const PROTOCOL_ICON = {
   lending: '🏦', amm: '🔁', perps: '📈', bridge: '🌉', staking: '🥩', 'nft-market': '🖼️',
   governance: '🗳️', oracle: '🔮', token: '🪙', vault: '🧰', other: '🧩',

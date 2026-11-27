@@ -13,6 +13,7 @@ import {
   STEER, STEERS_FOR, STEER_STATE, KIND_ICON, EVIDENCE_ICON, PROTOCOL_ICON,
 } from './labels.js';
 import { openSteerComposer, authorAvatar } from './steer.js';
+import { storyFor } from './story.js';
 import { bus, loadPlaybook } from './bus.js';
 
 const TEXT_FIELD = { component: 'reasoning', assumption: 'rationale', hypothesis: 'reasoning', finding: 'notes', target: 'description' };
@@ -21,7 +22,22 @@ const TEXT_LABEL = { reasoning: 'Reasoning', rationale: 'Why it is assumed', not
 export function createDetail(item, { onClose, inMap = false } = {}) {
   const el = h('div.detail');
   const head = h('div.detail-head');
+  const storyEl = h('div.story');
+  const moreKey = `recon.more.${item.kind}`;
+  const moreOpen = (() => { try { return localStorage.getItem(moreKey) === '1'; } catch { return false; } })();
+  const moreBtn = h('button.more-toggle', { type: 'button', 'aria-expanded': String(moreOpen) });
   const scroll = h('div.detail-scroll');
+  const moreBody = h('div.more-body', { hidden: !moreOpen });
+  moreBtn.addEventListener('click', () => {
+    const open = moreBody.hidden;
+    moreBody.hidden = !open;
+    moreBtn.setAttribute('aria-expanded', String(open));
+    try { localStorage.setItem(moreKey, open ? '1' : '0'); } catch { /* ignore */ }
+    paintMore();
+  });
+  const paintMore = () => setChildren(moreBtn, icon('chevron'), moreBody.hidden ? 'More details: fields, evidence, checklist, history' : 'Fewer details');
+  paintMore();
+  scroll.append(storyEl, moreBtn, moreBody);
   el.append(head, scroll);
 
   const secs = {
@@ -37,7 +53,7 @@ export function createDetail(item, { onClose, inMap = false } = {}) {
     history: h('div.detail-sec'),
     danger: h('div.detail-sec'),
   };
-  scroll.append(...Object.values(secs));
+  moreBody.append(...Object.values(secs));
 
   // stable sub-forms that must survive re-renders
   const evForm = evidenceForm(() => current);
@@ -53,6 +69,7 @@ export function createDetail(item, { onClose, inMap = false } = {}) {
     if (v === lastVersion) return;
     lastVersion = v;
     renderHead();
+    renderStory();
     renderVerify();
     renderSteer();
     renderProps();
@@ -136,6 +153,50 @@ export function createDetail(item, { onClose, inMap = false } = {}) {
         }, icon(STEER[a].icon), STEER[a].label)),
         it.kind !== 'agent' ? prio : null),
       steers.length ? h('div', { style: { marginTop: '10px' } }, ...steers.map((s) => steerMini(s))) : null);
+  }
+
+  // What it is, what is known, what is still open, and the two or three obvious next steps.
+  function renderStory() {
+    const it = current;
+    const st = storyFor(it);
+    const verdict = it.verification === 'verified' ? 'You agreed with this.' : it.verification === 'disputed' ? 'You doubted this; whoever made the claim was asked to revisit it.' : null;
+    const acts = actionsFor(it).map((a) => h(`button.btn.btn-sm${a.primary ? '.btn-primary' : ''}`, {
+      'data-tip': a.tip || null,
+      on: { click: async (e) => { try { await a.run(e.currentTarget); } catch (err) { toast(err.message, 'error'); } } },
+    }, a.icon ? icon(a.icon) : null, a.label));
+    setChildren(storyEl,
+      h('div.story-text', ...st.lines.filter(Boolean)),
+      st.status ? h(`div.story-status.${st.tone || 'muted'}`, st.status) : null,
+      verdict ? h(`div.story-status.${it.verification === 'verified' ? 'ok' : 'bad'}`, verdict) : null,
+      acts.length ? h('div.story-actions', ...acts) : null);
+  }
+
+  function actionsFor(it) {
+    const agree = (label = 'Looks right') => ({ label, icon: 'check', run: () => save({ verification: 'verified' }), tip: 'You checked it and agree' });
+    const doubt = (label = 'I doubt it') => ({ label, icon: 'x', run: () => save({ verification: 'disputed' }), tip: 'Whoever made this claim is asked to revisit it' });
+    const ask = (label, action) => ({ label, icon: 'send', primary: true, run: (anchor) => openSteerComposer(anchor, { item: it, action }) });
+    switch (it.kind) {
+      case 'assumption': return [ask('Ask an agent to test it', 'challenge'), { ...agree(), run: () => save({ verification: 'verified', state: 'verified' }) }, doubt()];
+      case 'hypothesis':
+        if (it.status === 'dropped') return [{ label: 'Reopen', icon: 'refresh', run: () => save({ status: 'testing' }) }];
+        return [
+          it.status === 'confirmed' && !it.findingId ? { label: 'Make it a finding', icon: 'bug', primary: true, run: () => promote(it) } : ask('Ask for proof', 'verify'),
+          it.status !== 'confirmed' ? { label: 'It is real', icon: 'check', run: () => save({ status: 'confirmed', verification: 'verified' }) } : agree('I agree'),
+          { label: 'Not a bug', icon: 'x', run: () => { const why = prompt('Why is it not a bug? (one line)'); if (why !== null) return save({ status: 'dropped', dropReason: why }); return null; } },
+        ];
+      case 'finding': return [ask('Ask for a stronger proof', 'verify'), agree('I agree'), doubt(), { label: 'Report', icon: 'file', run: () => bus.report?.() }];
+      case 'component':
+        if (it.type === 'actor' || it.type === 'external') return [];
+        return [ask('Point an agent here', 'cover'), agree('Looks fine to me'), doubt('Something is off')];
+      case 'relation': return [agree('Correct'), doubt('Wrong')];
+      case 'lead':
+        if (it.state === 'done' || it.state === 'dropped') return [{ label: 'Reopen', icon: 'refresh', run: () => save({ state: 'open' }) }];
+        return [{ label: 'Point an agent at it', icon: 'send', primary: true, run: (anchor) => openSteerComposer(anchor, { item: it, action: 'cover', to: ['all'] }) },
+          { label: 'Done', icon: 'check', run: () => save({ state: 'done' }) }, { label: 'Drop', icon: 'x', run: () => save({ state: 'dropped' }) }];
+      case 'chain': return [agree('I agree'), doubt()];
+      case 'target': return [ask('Point agents at it', 'cover'), { label: 'Edit scope', icon: 'edit', run: () => { if (moreBody.hidden) moreBtn.click(); secs.scope.scrollIntoView({ block: 'start', behavior: 'smooth' }); } }];
+      default: return [];
+    }
   }
 
   // The confirmation card for findings, and the confirmation loop for hypotheses.

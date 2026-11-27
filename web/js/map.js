@@ -314,7 +314,7 @@ export function createMap({ stage, world, edges, nodes, markers, expandLayer }) 
         const testing = list('hypothesis', (x) => x.status === 'testing');
         const high = testing.filter((x) => x.confidence === 'high').length;
         setChildren(body,
-          h('div.sum-label', icon('flask'), h('span.term', { 'data-term': 'hypothesis' }, 'Hypotheses in flight')),
+          h('div.sum-label', icon('flask'), h('span.term', { 'data-term': 'hypothesis' }, 'Suspected bugs')),
           h('div.sum-value', String(testing.length), h('small', `${list('hypothesis', (x) => x.status === 'confirmed').length} confirmed`)),
           h('div.sum-foot', h('span', `${high} high confidence`), h('span', `${list('hypothesis', (x) => x.status === 'dropped').length} dropped`), h('span', `${list('assumption', (x) => x.state === 'assumed').length} open assumptions`)));
         break;
@@ -337,7 +337,7 @@ export function createMap({ stage, world, edges, nodes, markers, expandLayer }) 
         const sug = s.suggestions.slice(0, 2);
         const pending = list('proposal', (p) => p.state === 'pending');
         setChildren(body,
-          h('div.sum-label', icon('compass'), 'Where to look next'),
+          h('div.sum-label', icon('compass'), h('span', 'Next move')),
           pending.length
             ? h('div.sum-text', `${authorName(pending[0].createdBy)} proposes: ${truncate(pending[0].text, 70)}`)
             : sug.length ? h('div.sum-text', truncate(sug[0].title, 70)) : h('div', { style: { font: '400 20px var(--font-hand)', color: 'var(--muted)' } }, 'Nothing obvious. Nice.'),
