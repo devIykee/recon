@@ -514,7 +514,7 @@ export async function dispatch(msg, { getClient, onInitialize, ctx = {} } = {}) 
         onInitialize?.(params);
         return ok({
           protocolVersion: PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
-          capabilities: { tools: { listChanged: false }, prompts: { listChanged: false } },
+          capabilities: { tools: { listChanged: true }, prompts: { listChanged: true } },
           serverInfo: { name: 'recon', version: '0.1.0' },
           instructions: INSTRUCTIONS,
         });
@@ -559,7 +559,7 @@ export async function dispatch(msg, { getClient, onInitialize, ctx = {} } = {}) 
   }
 }
 
-export async function runMcp({ name = process.env.RECON_AGENT || 'agent', url, key, model, hunt = null, huntPinned = false, input = process.stdin, output = process.stdout, log = (...a) => console.error(...a), embed = true } = {}) {
+export async function runMcp({ name = process.env.RECON_AGENT || 'agent', url, key, model, hunt = null, huntPinned = false, reportHunt = false, input = process.stdin, output = process.stdout, log = (...a) => console.error(...a), embed = true } = {}) {
   const hubUrl = (url || defaultUrl()).replace(/\/$/, '');
   let client = createClient({ url: hubUrl, key, agent: name, transport: 'mcp', model });
   let huntName = hunt;
@@ -594,6 +594,7 @@ export async function runMcp({ name = process.env.RECON_AGENT || 'agent', url, k
       const r = await client.start(huntName);
       huntName = r.hunt?.name || huntName;
       client = createClient({ url: client.url, key, agent: name, transport: 'mcp', model, hunt: huntName });
+      tellHunt();
       log(`recon mcp: working in the hunt "${huntName}"${r.onScreen === false ? ' (in the background; the board offers a switch)' : ''}`);
     } catch (err) { log(`recon mcp: could not open the hunt "${huntName}": ${err.message}`); huntName = null; }
   }
@@ -601,6 +602,8 @@ export async function runMcp({ name = process.env.RECON_AGENT || 'agent', url, k
   const hubReady = ensureHub().catch((err) => log(`recon mcp: ${err.message}`)).then(() => enterHunt());
 
   const send = (msg) => output.write(`${JSON.stringify(msg)}\n`);
+  // under the supervisor: say which hunt we are in, so an update keeps the agent there
+  const tellHunt = () => { if (reportHunt && huntName) send({ jsonrpc: '2.0', method: 'notifications/recon/hunt', params: { hunt: huntName } }); };
 
   // One recon entry serves every project. Clients that start MCP servers outside
   // the project (a fixed folder, the home directory) still say which workspace
@@ -625,7 +628,7 @@ export async function runMcp({ name = process.env.RECON_AGENT || 'agent', url, k
     const res = await dispatch(msg, {
       ctx: {
         canWriteFiles: true, cwd: process.cwd(),
-        setHunt: (h) => { huntName = h; client = createClient({ url: client.url, key, agent: name, transport: 'mcp', model, hunt: h }); },
+        setHunt: (h) => { huntName = h; client = createClient({ url: client.url, key, agent: name, transport: 'mcp', model, hunt: h }); tellHunt(); },
       },
       getClient: async () => { await hubReady; return client; },
       onInitialize: () => hubReady.then(() => client.heartbeat({}).catch(() => {})),

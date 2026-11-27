@@ -12,6 +12,8 @@ one-line setup
                                         gemini, opencode, cursor, windsurf, claude desktop), open the board.
                                         --here also adds it to project-scoped clients (grok) in this folder
                                         --clean removes extra recon-* entries: one "recon" serves every hunt
+  recon update [--check] [--from DIR]   install the latest recon from GitHub, restart the board; agents on
+                                        MCP switch to it without restarting, the CLI on its next command
   recon agent [--as NAME]               for agents: start the board if needed and print how to use it
 
 run the hub
@@ -191,7 +193,9 @@ const client = () => createClient({ url: flags.url, key: flags.key ?? process.en
 
 async function serve() {
   const { createHub } = await import('../src/hub.js');
+  let stopping = null;
   const hub = createHub({
+    onShutdown: () => stop(),
     mode: flags.mode, host: flags.host, port: flags.port !== undefined ? Number(flags.port) : undefined,
     dataDir: flags.data, key: typeof flags.key === 'string' ? flags.key : undefined, keysFile: flags.keys,
     watch: many(flags.watch), seed: flags.empty ? 'empty' : undefined, demo: flags.demo === false ? false : undefined,
@@ -216,18 +220,34 @@ async function serve() {
     '',
   ].join('\n'));
   if (flags.open) (await import('../src/launch.js')).openBrowser(hub.url);
-  const stop = async () => { process.stderr.write('\n  saving and shutting down…\n'); await hub.close(); process.exit(0); };
+  async function stop() {
+    if (stopping) return stopping;
+    process.stderr.write('\n  saving and shutting down…\n');
+    stopping = hub.close().then(() => process.exit(0));
+    return stopping;
+  }
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
 }
 
 async function mcp() {
+  // What the agent's client starts is a small supervisor; it runs the server as a
+  // worker and switches to the new version when `recon update` installs one.
+  if (!flags.worker && process.env.RECON_MCP_DIRECT !== '1') {
+    const { runSupervisor } = await import('../src/mcpsup.js');
+    const { reconHome } = await import('../src/launch.js');
+    const app = path.join(reconHome(), 'app', 'bin', 'recon.js');
+    const own = path.resolve(process.argv[1]);
+    const bin = fs.existsSync(app) ? app : own;
+    await runSupervisor({ bin, args: process.argv.slice(3), watch: bin === app });
+    return;
+  }
   const { runMcp } = await import('../src/mcp.js');
   const { projectName } = await import('../src/project.js');
   // each project gets its own hunt: named after the git repo / package / folder the agent runs in
   // an explicit --hunt pins it; otherwise the client's workspace (MCP roots) can correct it
   const hunt = flags.hunt === false ? null : (huntRef || projectName(process.cwd()));
-  await runMcp({ name: flags.name || agentName || 'agent', url: flags.url, key: flags.key ?? process.env.RECON_KEY, model: flags.model, hunt, huntPinned: Boolean(huntRef) || flags.hunt === false });
+  await runMcp({ name: flags.name || agentName || 'agent', url: flags.url, key: flags.key ?? process.env.RECON_KEY, model: flags.model, hunt, huntPinned: Boolean(huntRef) || flags.hunt === false, reportHunt: Boolean(flags.worker) });
 }
 
 async function status() {
@@ -664,6 +684,11 @@ async function wait() {
     : dim('nothing from the human yet; run recon wait again to keep listening')));
 }
 
+async function update() {
+  const { runUpdate } = await import('../src/update.js');
+  await runUpdate({ from: typeof flags.from === 'string' ? flags.from : null, check: Boolean(flags.check), url: flags.url || process.env.RECON_URL || undefined, key: flags.key ?? process.env.RECON_KEY });
+}
+
 async function dismiss() {
   const r = await client().dismiss(need(pos[0], 'suggestion id (sg_...)'), need(pos.slice(1).join(' '), 'reason'));
   out(r, () => (r.already ? 'already dismissed' : `dismissed "${r.dismissed.title}"`));
@@ -772,7 +797,7 @@ const COMMANDS = {
   steers, ack: () => steerVerb('ack'), address: () => steerVerb('address'), steer,
   verify: () => verdict('verified'), dispute: () => verdict('disputed'), unverify: () => verdict('unverified'),
   accept: () => decide('accept'), decline: () => decide('decline'),
-  setup, agent: agentCmd, start, scan, relate, phase, ready, report, skills, wait, say, dismiss, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
+  setup, agent: agentCmd, start, scan, relate, phase, ready, report, skills, wait, say, dismiss, update, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
 };
 
 async function main() {
