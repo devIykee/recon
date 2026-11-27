@@ -18,6 +18,7 @@ import { healthAll } from './health.js';
 import { DemoAgent } from './demo.js';
 import { watchSource } from './dropin.js';
 import { loadConfig, ROOT } from './config.js';
+import { createClient } from './client.js';
 
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 
@@ -76,6 +77,9 @@ export function createHub(overrides = {}) {
   const log = cfg.log;
   const tenants = new Map();
   const ws = new WsServer();
+  // Requests the hub makes to itself (the http mcp endpoint) carry this; nobody else knows it.
+  const internalToken = crypto.randomBytes(24).toString('hex');
+  const mcpSessions = new Map();
 
   function tenant(id = 'default') {
     let t = tenants.get(id);
@@ -349,8 +353,10 @@ export function createHub(overrides = {}) {
   async function handle(req, res) {
     const url = new URL(req.url, 'http://local');
     try {
-      checkHost(req);
-      if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
+      const internal = internalToken && req.headers['x-recon-internal'] === internalToken;
+      if (!internal) checkHost(req);
+      if (url.pathname === '/mcp') return await handleMcp(req, res, url);
+      if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url, internal);
       if (req.method !== 'GET' && req.method !== 'HEAD') throw new HttpError(405, 'method not allowed');
       return serveStatic(req, res, url);
     } catch (err) {
@@ -358,11 +364,13 @@ export function createHub(overrides = {}) {
     }
   }
 
-  async function handleApi(req, res, url) {
+  async function handleApi(req, res, url, internal = false) {
     const isWrite = req.method !== 'GET' && req.method !== 'HEAD';
-    if (isWrite) checkOrigin(req);
+    if (isWrite && !internal) checkOrigin(req);
     let auth = null;
-    if (url.pathname === '/api/health') {
+    if (internal) {
+      auth = { tenant: String(req.headers['x-recon-tenant'] || 'default'), role: 'any', agent: null };
+    } else if (url.pathname === '/api/health') {
       try { auth = authenticate(req, url); } catch { auth = null; }
     } else {
       auth = authenticate(req, url);
@@ -384,6 +392,46 @@ export function createHub(overrides = {}) {
     const who = t ? actor(req, auth, t) : 'human';
     const result = await match.handler({ req, url, params, query: url.searchParams, body, auth, t, who });
     sendJson(res, 200, result);
+  }
+
+  // MCP over HTTP (streamable http, json responses). Lets a remote agent use a hosted
+  // hub with nothing installed: claude mcp add --transport http recon https://host/mcp
+  async function handleMcp(req, res, url) {
+    checkOrigin(req);
+    const auth = authenticate(req, url);
+    if (req.method === 'GET') { res.writeHead(405, { allow: 'POST, DELETE' }); res.end(); return; }
+    if (req.method === 'DELETE') { mcpSessions.delete(req.headers['mcp-session-id']); res.writeHead(204); res.end(); return; }
+    if (req.method !== 'POST') throw new HttpError(405, 'use POST');
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { throw new HttpError(400, 'invalid json-rpc body'); }
+    const { dispatch } = await import('./mcp.js');
+    const t = tenant(auth.tenant);
+    let sid = req.headers['mcp-session-id'];
+    let session = sid ? mcpSessions.get(sid) : null;
+    const messages = Array.isArray(body) ? body : [body];
+    const init = messages.find((m) => m?.method === 'initialize');
+    const named = auth.agent || req.headers['x-recon-agent'] || url.searchParams.get('agent');
+    if (init || !session) {
+      sid = crypto.randomUUID();
+      session = { tenant: auth.tenant, agent: String(named || init?.params?.clientInfo?.name || 'agent').slice(0, 60), at: Date.now() };
+      mcpSessions.set(sid, session);
+    }
+    if (named) session.agent = String(named).slice(0, 60);
+    session.at = Date.now();
+    const host = ['0.0.0.0', '::'].includes(cfg.host) ? '127.0.0.1' : cfg.host.includes(':') ? `[${cfg.host}]` : cfg.host;
+    const client = createClient({
+      url: `http://${host}:${server.address().port}`, agent: session.agent, transport: 'mcp',
+      headers: { 'x-recon-internal': internalToken, 'x-recon-tenant': session.tenant },
+    });
+    const out = [];
+    for (const m of messages) {
+      const r = await dispatch(m, { getClient: async () => client, onInitialize: () => t.store.touchAgent(session.agent, { transport: 'mcp' }) });
+      if (r) out.push(r);
+    }
+    if (!out.length) { res.writeHead(202, { 'mcp-session-id': sid }); res.end(); return; }
+    const payload = JSON.stringify(Array.isArray(body) ? out : out[0]);
+    res.writeHead(200, { 'content-type': 'application/json', 'mcp-session-id': sid, 'cache-control': 'no-store' });
+    res.end(payload);
   }
 
   function serveStatic(req, res, url) {
@@ -440,6 +488,7 @@ export function createHub(overrides = {}) {
       }
     }
     for (const c of ws.clients) { if (!c.alive) c.terminate(); else c.ping(); }
+    for (const [id, sess] of mcpSessions) if (Date.now() - sess.at > 24 * 3600_000) mcpSessions.delete(id);
   }, 5000);
   healthTimer.unref();
 

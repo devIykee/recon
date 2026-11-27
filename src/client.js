@@ -14,11 +14,11 @@ export function defaultUrl(env = process.env) {
   return (env.RECON_URL || `http://127.0.0.1:${env.RECON_PORT || DEFAULT_PORT}`).replace(/\/$/, '');
 }
 
-export function createClient({ url = defaultUrl(), key = process.env.RECON_KEY, agent = null, transport = 'cli', model = null } = {}) {
+export function createClient({ url = defaultUrl(), key = process.env.RECON_KEY, agent = null, transport = 'cli', model = null, headers: extra = {} } = {}) {
   const base = url.replace(/\/$/, '');
 
   async function req(method, path, body) {
-    const headers = { accept: 'application/json' };
+    const headers = { accept: 'application/json', ...extra };
     if (key) headers.authorization = `Bearer ${key}`;
     if (agent) { headers['x-recon-agent'] = agent; headers['x-recon-transport'] = transport; }
     if (model) headers['x-recon-model'] = model;

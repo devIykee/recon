@@ -75,3 +75,21 @@ test('briefing walks a new target through map, assumptions, hunt', () => {
   assert.doesNotMatch(b.next, /Phase/);
   assert.ok(suggest(s.state).some((x) => x.rule === 'untouched'));
 });
+
+test('agents cannot skip the map or the developers\' assumptions; humans can', () => {
+  const s = new Store();
+  const t = s.create('target', { name: 'V', protocolType: 'vault' }, 'human');
+  const a = s.touchAgent('bot', {});
+  const c1 = s.create('component', { targetId: t.id, name: 'Vault.deposit()' }, a.id);
+  assert.throws(() => s.patch('target', t.id, { phase: 'hunting' }, a.id), /finish the map/);
+  const u = s.create('component', { targetId: t.id, name: 'User', type: 'actor' }, a.id);
+  s.create('relation', { targetId: t.id, from: u.id, to: c1.id, type: 'calls' }, a.id);
+  assert.throws(() => s.patch('target', t.id, { phase: 'hunting' }, a.id), /developers assume/);
+  s.patch('target', t.id, { phase: 'assumptions' }, a.id);
+  s.create('assumption', { text: 'asset is a plain ERC20', targetId: t.id, origin: 'developer', category: 'input' }, a.id);
+  s.patch('target', t.id, { phase: 'hunting' }, a.id);
+  assert.equal(s.get('target', t.id).phase, 'hunting');
+  const t2 = s.create('target', { name: 'W' }, 'human');
+  s.patch('target', t2.id, { phase: 'hunting' }, 'human');
+  assert.equal(s.get('target', t2.id).phase, 'hunting');
+});

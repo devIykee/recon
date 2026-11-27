@@ -345,6 +345,52 @@ function pick(obj, keys) {
   return Object.fromEntries(keys.filter((k) => obj[k] !== undefined).map((k) => [k, obj[k]]));
 }
 
+// The protocol itself, shared by the stdio server and the hub's HTTP /mcp endpoint.
+// Returns the JSON-RPC response for a request, or null for a notification.
+export async function dispatch(msg, { getClient, onInitialize } = {}) {
+  if (!msg || msg.jsonrpc !== '2.0') return { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'invalid request' } };
+  const { id, method, params } = msg;
+  const isRequest = id !== undefined && id !== null;
+  const ok = (result) => (isRequest ? { jsonrpc: '2.0', id, result } : null);
+  const fail = (code, message) => (isRequest ? { jsonrpc: '2.0', id, error: { code, message } } : null);
+  try {
+    switch (method) {
+      case 'initialize': {
+        const asked = params?.protocolVersion;
+        onInitialize?.(params);
+        return ok({
+          protocolVersion: PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
+          capabilities: { tools: { listChanged: false } },
+          serverInfo: { name: 'recon', version: '0.1.0' },
+          instructions: INSTRUCTIONS,
+        });
+      }
+      case 'notifications/initialized':
+      case 'notifications/cancelled':
+        return null;
+      case 'ping':
+        return ok({});
+      case 'tools/list':
+        return ok({ tools: TOOLS.map(({ name: n, description, inputSchema }) => ({ name: n, description, inputSchema })) });
+      case 'tools/call': {
+        const tool = TOOLS.find((t) => t.name === params?.name);
+        if (!tool) return fail(-32602, `unknown tool ${params?.name}`);
+        try {
+          const result = await tool.run(await getClient(), params.arguments || {});
+          return ok({ content: [{ type: 'text', text: JSON.stringify(result, null, 1) }] });
+        } catch (err) {
+          const detail = err instanceof ReconError && err.details ? `\n${[].concat(err.details).join('\n')}` : '';
+          return ok({ content: [{ type: 'text', text: `error: ${err.message}${detail}` }], isError: true });
+        }
+      }
+      default:
+        return fail(-32601, `method not found: ${method}`);
+    }
+  } catch (err) {
+    return fail(-32603, err.message);
+  }
+}
+
 export async function runMcp({ name = process.env.RECON_AGENT || 'agent', url, key, model, input = process.stdin, output = process.stdout, log = (...a) => console.error(...a), embed = true } = {}) {
   const hubUrl = (url || defaultUrl()).replace(/\/$/, '');
   let client = createClient({ url: hubUrl, key, agent: name, transport: 'mcp', model });
@@ -375,55 +421,13 @@ export async function runMcp({ name = process.env.RECON_AGENT || 'agent', url, k
   const hubReady = ensureHub().catch((err) => log(`recon mcp: ${err.message}`));
 
   const send = (msg) => output.write(`${JSON.stringify(msg)}\n`);
-  const reply = (id, result) => send({ jsonrpc: '2.0', id, result });
-  const fail = (id, code, message) => send({ jsonrpc: '2.0', id, error: { code, message } });
 
   async function handle(msg) {
-    if (!msg || msg.jsonrpc !== '2.0') return;
-    const { id, method, params } = msg;
-    const isRequest = id !== undefined && id !== null;
-    try {
-      switch (method) {
-        case 'initialize': {
-          const asked = params?.protocolVersion;
-          const version = PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0];
-          reply(id, {
-            protocolVersion: version,
-            capabilities: { tools: { listChanged: false } },
-            serverInfo: { name: 'recon', version: '0.1.0' },
-            instructions: INSTRUCTIONS,
-          });
-          hubReady.then(() => client.heartbeat({}).catch(() => {}));
-          return;
-        }
-        case 'notifications/initialized':
-        case 'notifications/cancelled':
-          return;
-        case 'ping':
-          if (isRequest) reply(id, {});
-          return;
-        case 'tools/list':
-          reply(id, { tools: TOOLS.map(({ name: n, description, inputSchema }) => ({ name: n, description, inputSchema })) });
-          return;
-        case 'tools/call': {
-          await hubReady;
-          const tool = TOOLS.find((t) => t.name === params?.name);
-          if (!tool) { fail(id, -32602, `unknown tool ${params?.name}`); return; }
-          try {
-            const result = await tool.run(client, params.arguments || {});
-            reply(id, { content: [{ type: 'text', text: JSON.stringify(result, null, 1) }] });
-          } catch (err) {
-            const detail = err instanceof ReconError && err.details ? `\n${[].concat(err.details).join('\n')}` : '';
-            reply(id, { content: [{ type: 'text', text: `error: ${err.message}${detail}` }], isError: true });
-          }
-          return;
-        }
-        default:
-          if (isRequest) fail(id, -32601, `method not found: ${method}`);
-      }
-    } catch (err) {
-      if (isRequest) fail(id, -32603, err.message);
-    }
+    const res = await dispatch(msg, {
+      getClient: async () => { await hubReady; return client; },
+      onInitialize: () => hubReady.then(() => client.heartbeat({}).catch(() => {})),
+    });
+    if (res) send(res);
   }
 
   const rl = readline.createInterface({ input, crlfDelay: Infinity });

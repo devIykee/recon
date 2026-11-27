@@ -16,6 +16,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { phaseStatus } from './knowledge.js';
 import {
   KINDS, ENUMS, fieldsFor, validateFields, withDefaults, newId, slug, isHuman,
   MOVE_FIELDS, TITLE_FIELD, AGENT_COLORS, ValidationError, OwnershipError, isKind,
@@ -154,6 +155,7 @@ export class Store extends EventEmitter {
     const clean = validateFields(kind, fields, { author, partial: true });
     this.checkRefs(kind, clean);
     if (kind === 'component' && !force) this.checkOwnership(item, clean, author);
+    if (kind === 'target' && clean.phase && !isHuman(author)) this.checkPhaseGate(item, clean.phase);
     const ts = at || this.tick();
     const spec = fieldsFor(kind);
     const changed = [];
@@ -343,6 +345,23 @@ export class Store extends EventEmitter {
       throw new OwnershipError(
         `component "${item.name}" is owned by ${item.owner}. add evidence instead, or ask the human to reassign it (fields: ${contested.join(', ')})`,
       );
+    }
+  }
+
+  // Agents work in order: map the system, record the developers' assumptions, then hunt.
+  // A human can move a target to any phase.
+  checkPhaseGate(target, next) {
+    const order = ENUMS.phase;
+    if (order.indexOf(next) <= order.indexOf(target.phase || 'mapping')) return;
+    const ps = phaseStatus(this.state, target.id);
+    if (order.indexOf(next) >= order.indexOf('assumptions')) {
+      const code = ps.components - ps.actors - ps.externals;
+      if (code < 1 || ps.relations < Math.max(1, Math.ceil(ps.components / 2))) {
+        throw new ValidationError(`finish the map first: ${ps.components} parts but only ${ps.relations} connections. Add the actors and external dependencies, and how the parts call, transfer to, read from and own each other.`);
+      }
+    }
+    if (order.indexOf(next) >= order.indexOf('hunting') && ps.developerAssumptions < 1) {
+      throw new ValidationError('record what the developers assume first (assumptions with origin "developer": trust model, invariants, expected inputs and tokens, external dependencies), then move to hunting.');
     }
   }
 

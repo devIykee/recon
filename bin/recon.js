@@ -128,6 +128,7 @@ function ago(ts) {
 }
 
 function line(it) {
+  if (it.kind === 'relation') return `${dim(it.id.padEnd(22))} ${it.from} ${tint(it.type)} ${it.to}${it.label ? dim(` (${it.label})`) : ''}`;
   const title = it.name || it.title || it.text || it.note || '';
   const state = it.reviewState || it.status || it.stage || it.state || '';
   const extra = [it.severity && tint(it.severity), it.confidence && `conf ${it.confidence}`, it.verification && it.verification !== 'unverified' && tint(it.verification)].filter(Boolean).join(' ');

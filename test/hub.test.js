@@ -133,3 +133,24 @@ test('multi-tenant mode isolates tenants', async () => {
   assert.equal(a[0].name, 'Alpha target');
   await h.close();
 });
+
+test('mcp over http: initialize names the agent from the client, tools work with a key', async () => {
+  const h = createHub({ mode: 'server', key: 'k3y', host: '127.0.0.1', port: 0, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'recon-mcphttp-')), demo: false, log: () => {} });
+  await h.listen();
+  const u = `http://127.0.0.1:${h.port}/mcp`;
+  const rpc = (body, sid, key = 'k3y') => fetch(u, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${key}`, ...(sid ? { 'mcp-session-id': sid } : {}) }, body: JSON.stringify(body) });
+  assert.equal((await rpc({ jsonrpc: '2.0', id: 1, method: 'ping' }, null, 'wrong')).status, 401);
+  const init = await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'claude-code', version: '1' } } });
+  const sid = init.headers.get('mcp-session-id');
+  assert.ok(sid);
+  assert.equal((await init.json()).result.serverInfo.name, 'recon');
+  assert.equal((await rpc({ jsonrpc: '2.0', method: 'notifications/initialized' }, sid)).status, 202);
+  const call = await (await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'recon_briefing', arguments: {} } }, sid)).json();
+  assert.equal(call.result.isError, undefined);
+  assert.match(JSON.parse(call.result.content[0].text).next, /example/);
+  assert.ok(h.tenant().store.get('agent', 'ag_claude-code'), 'agent named after the mcp client');
+  assert.equal(h.tenant().store.get('agent', 'ag_claude-code').transport, 'mcp');
+  const forged = await fetch(`http://127.0.0.1:${h.port}/api/state`, { headers: { 'x-recon-internal': 'guess' } });
+  assert.equal(forged.status, 401);
+  await h.close();
+});

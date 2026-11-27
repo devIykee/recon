@@ -694,7 +694,9 @@ export function briefing(state, agentId) {
     const pb = playbook(t.protocolType);
     const phase = t.phase || 'mapping';
     const comps = Object.values(items.component).filter((c) => c.targetId === t.id);
+    const linked = new Set(Object.values(items.relation || {}).filter((r) => r.targetId === t.id).flatMap((r) => [r.from, r.to]));
     return {
+      unconnected: comps.filter((c) => !linked.has(c.id)).map((c) => c.name),
       id: t.id, name: t.name, chain: t.chain, protocolType: t.protocolType, priority: t.priority,
       phase, phaseGoal: PHASES[phase], progress: phaseStatus(state, t.id),
       map: {
@@ -714,7 +716,7 @@ export function briefing(state, agentId) {
   else if (steers.length) next = 'Work your acknowledged steers and mark them addressed with a short response.';
   else if (disputed.length) next = 'A human disputed one of your claims. Revisit the evidence and either strengthen it or retract.';
   else if (!targets.length) next = 'Add the target you are researching (recon_add_target), with its protocol type.';
-  else if (mappingT) next = `Phase 1, map "${mappingT.name}" before hunting: add every contract, actor (users, admins, keepers) and external dependency (tokens, oracles) as components with a one-line summary, and every connection between them (calls, transfers, reads, owns, trusts). Use recon_map. Then set the phase to "assumptions" (recon_phase).`;
+  else if (mappingT) next = `Phase 1, map "${mappingT.name}" before hunting (${mappingT.progress.components} parts, ${mappingT.progress.actors} actors, ${mappingT.progress.externals} external, ${mappingT.progress.relations} connections so far${mappingT.unconnected.length ? `; not connected to anything yet: ${mappingT.unconnected.slice(0, 8).join(', ')}` : ''}): add every contract, actor (users, admins, keepers) and external dependency (tokens, oracles) as components with a one-line summary, and every connection between them (calls, transfers, reads, owns, trusts). Use recon_map. Then set the phase to "assumptions" (recon_phase).`;
   else if (assumingT) next = `Phase 2, write down what "${assumingT.name}"'s developers assume: who is trusted, which invariants must hold, what inputs and tokens they expect, what external systems they rely on. Record each with recon_add_assumption origin="developer" and a category; use developerAssumptionPrompts as a starting list and keep only the ones this code actually makes. Then set the phase to "hunting".`;
   else if (owned.some((c) => c.reviewState !== 'reviewed')) next = 'Continue on the components you own or were assigned.';
   else if (suggestions.length) next = `Propose your next move (recon_propose). A good candidate: "${suggestions[0].title}".`;
