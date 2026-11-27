@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Store } from '../src/store.js';
 import { seedExample } from '../src/seed.js';
 import { playbook, checklistFor, suggest, briefing, PLAYBOOKS, CLASSES } from '../src/knowledge.js';
+import { mustDo } from '../src/proactive.js';
 import { ENUMS } from '../src/model.js';
 
 test('every protocol type has a playbook whose classes exist', () => {
@@ -54,8 +55,52 @@ test('briefing tells an agent what to do next', () => {
   assert.equal(b.steers.length, 1);
   assert.match(b.next, /example/);
   assert.equal(b.example, true);
-  assert.ok(b.targets[0].playbook.classes.length);
   assert.equal(b.yourComponents.length, 2);
+});
+
+test('briefing is steers, disputed claims, the next action and ids; no playbook, notes or rules', () => {
+  const s = new Store();
+  seedExample(s);
+  const b = briefing(s.state, 'ag_scout');
+  for (const k of ['rules', 'existing']) assert.equal(b[k], undefined, k);
+  const t = b.targets[0];
+  for (const k of ['playbook', 'map', 'scope', 'developerAssumptionPrompts']) assert.equal(t[k], undefined, k);
+  assert.ok(b.untouched.every((x) => typeof x === 'string' && x.startsWith('cp_')));
+  const text = JSON.stringify(b);
+  for (const cls of Object.values(CLASSES)) for (const check of cls.checks) assert.ok(!text.includes(check), `check text leaked: ${check}`);
+  assert.ok(text.length < 4000, `briefing is ${text.length} bytes`);
+});
+
+test('a flagged part that already has a finding is not sent back to make a hypothesis', () => {
+  const s = new Store();
+  const t = s.create('target', { name: 'Perps', protocolType: 'perps', phase: 'hunting' }, 'human');
+  const a = s.touchAgent('bot', {}).id;
+  const web = s.create('component', { targetId: t.id, name: 'Perps web app', reviewState: 'flagged' }, 'human');
+  const flagged = () => suggest(s.state, { limit: 50 }).filter((x) => x.rule === 'flagged-no-hypothesis' && x.itemId === web.id);
+  assert.equal(flagged().length, 1);
+  s.create('finding', { title: 'XSS in the order form', targetId: t.id, componentId: web.id, severity: 'medium' }, 'human');
+  assert.equal(flagged().length, 0);
+  assert.ok(!mustDo(s.state, a).some((x) => x.kind === 'flag'), 'mustDo agrees');
+  assert.ok(!/into a hypothesis/.test(briefing(s.state, a).next));
+  // and an agent may flag a part on the strength of a finding alone
+  const api = s.create('component', { targetId: t.id, name: 'Perps API' }, a);
+  s.create('finding', { title: 'IDOR on /positions', targetId: t.id, componentId: api.id, severity: 'medium' }, 'human');
+  s.patch('component', api.id, { reviewState: 'flagged' }, a);
+  assert.equal(s.get('component', api.id).reviewState, 'flagged');
+});
+
+test('playbook gaps stop once a class is marked na, also on an external part or as a whole class', () => {
+  const s = new Store();
+  const t = s.create('target', { name: 'Perps', protocolType: 'perps', phase: 'hunting' }, 'human');
+  s.create('component', { targetId: t.id, name: 'Router.openPosition()' }, 'human');
+  const engine = s.create('component', { targetId: t.id, name: 'Liquidation engine (third party)', type: 'external' }, 'human');
+  const gap = (cls) => suggest(s.state, { limit: 50 }).some((x) => x.rule === 'playbook-gap' && x.classId === cls);
+  assert.ok(gap('liquidation'));
+  s.patch('component', engine.id, { checklist: { liquidation: 'na' } }, 'human');
+  assert.ok(!gap('liquidation'));
+  assert.ok(gap('funding-rate'));
+  s.patch('component', engine.id, { checklist: { 'funding-rate.0': 'na' } }, 'human');
+  assert.ok(!gap('funding-rate'));
 });
 
 test('briefing walks a new target through map, assumptions, hunt', () => {
@@ -64,12 +109,12 @@ test('briefing walks a new target through map, assumptions, hunt', () => {
   s.create('component', { targetId: t.id, name: 'Vault.deposit()' }, 'human');
   let b = briefing(s.state, 'ag_x');
   assert.match(b.next, /Phase 1, map "Vault"/);
-  assert.ok(b.targets[0].developerAssumptionPrompts.length >= 3);
+  assert.ok(playbook('vault').commonAssumptions.length >= 3, 'the usual assumptions are on recon_playbook');
   assert.equal(suggest(s.state)[0].rule, 'phase-mapping');
   assert.ok(!suggest(s.state).some((x) => x.rule === 'untouched'), 'no hunting suggestions while mapping');
   s.patch('target', t.id, { phase: 'assumptions' }, 'human');
   b = briefing(s.state, 'ag_x');
-  assert.match(b.next, /Phase 2/);
+  assert.match(b.next, /Phase 2.*recon_playbook/);
   s.patch('target', t.id, { phase: 'hunting' }, 'human');
   b = briefing(s.state, 'ag_x');
   assert.doesNotMatch(b.next, /Phase/);

@@ -57,6 +57,7 @@ write (as the human, or as an agent with --as NAME)
   recon skills [name]                   the human's skills; recon skills add <SKILL.md|folder>, rm <name>
   recon wait [--timeout 100]            agents: listen for the human instead of stopping; wakes when they write
   recon say <text> [--reply <steerId>]  agents: tell the human something on the board
+  recon dismiss <sg_id> <reason>        clear a suggestion that does not apply here
   recon propose <text> [--option "A" --option "B"] [--rationale ...]
       any add takes --evidence "ref" or --evidence "ref|what it shows" (repeatable)
   recon coverage <component> <untouched|scanning|reviewed|flagged> [--reasoning ...] [--evidence ...]
@@ -265,11 +266,13 @@ async function briefing() {
     ...b.steers.map((s) => `  ${dim(s.id)} ${tint(s.state)} ${s.action}${s.item ? ` → ${s.item.label}` : ''}${s.note ? `\n      ${s.note}` : ''}`),
     ...(b.disputed.length ? ['', bold('disputed by the human'), ...b.disputed.map((d) => `  ${dim(d.id)} ${d.kind}: ${d.label}`)] : []),
     '',
-    bold(`untouched (${b.untouched.length})`),
-    ...b.untouched.slice(0, 10).map((u) => `  ${dim(u.id)} ${u.name}`),
+    ...(b.mustDo.length ? ['', bold(`must do (${b.mustDo.length})`), ...b.mustDo.slice(0, 8).map((m) => `  ${m.urgent ? COLORS.flagged('!') : ' '} ${m.do} ${dim(`(${m.how})`)}`)] : []),
+    '',
+    `${bold('untouched')} ${dim(b.untouched.join(' ') || 'none')}`,
     '',
     bold('suggested'),
-    ...b.suggestions.map((s) => `  ${s.action.padEnd(9)} ${s.title}`),
+    ...b.suggestions.map((s) => `  ${dim(s.id)} ${s.action.padEnd(9)} ${s.title}`),
+    dim('  recon get <id> for any item · recon playbook <type> for checks · recon dismiss <sg_id> "<why>" if one does not apply'),
   ].join('\n'));
 }
 
@@ -659,6 +662,11 @@ async function wait() {
     : dim('nothing from the human yet; run recon wait again to keep listening')));
 }
 
+async function dismiss() {
+  const r = await client().dismiss(need(pos[0], 'suggestion id (sg_...)'), need(pos.slice(1).join(' '), 'reason'));
+  out(r, () => (r.already ? 'already dismissed' : `dismissed "${r.dismissed.title}"`));
+}
+
 async function say() {
   const r = await client().say(need(pos.join(' '), 'text'), { replyTo: typeof flags.reply === 'string' ? flags.reply : '' });
   out(r, () => `said: ${r.text}`);
@@ -762,7 +770,7 @@ const COMMANDS = {
   steers, ack: () => steerVerb('ack'), address: () => steerVerb('address'), steer,
   verify: () => verdict('verified'), dispute: () => verdict('disputed'), unverify: () => verdict('unverified'),
   accept: () => decide('accept'), decline: () => decide('decline'),
-  setup, agent: agentCmd, start, scan, relate, phase, ready, report, skills, wait, say, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
+  setup, agent: agentCmd, start, scan, relate, phase, ready, report, skills, wait, say, dismiss, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
 };
 
 async function main() {

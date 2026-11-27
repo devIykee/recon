@@ -38,7 +38,8 @@ export function mustDo(state, agentId, now = Date.now()) {
 
   for (const c of Object.values(items.component)) {
     if (c.reviewState !== 'flagged' || !(mine(c) || c.lastTouchedBy === agentId)) continue;
-    if (!Object.values(items.hypothesis).some((h) => h.componentId === c.id && h.status !== 'dropped')) {
+    if (!Object.values(items.hypothesis).some((h) => h.componentId === c.id && h.status !== 'dropped')
+      && !Object.values(items.finding).some((f) => f.componentId === c.id)) {
       add('flag', c, `"${c.name}" is flagged with no hypothesis: write down the testable claim`, 'recon_add_hypothesis');
     }
   }

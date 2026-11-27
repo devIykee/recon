@@ -16,7 +16,7 @@ import { describeModel, isKind, ENUMS, KINDS } from './model.js';
 import { healthAll } from './health.js';
 import { DemoAgent } from './demo.js';
 import { Engagements } from './engagements.js';
-import { mustDo, pulse, beforeYouStop, whereWeLeftOff } from './proactive.js';
+import { mustDo, pulse, whereWeLeftOff } from './proactive.js';
 import { cardGaps, severityProblem, evidenceGaps, duplicateOf, reportedMatch, openSteersFor } from './quality.js';
 import { buildReport, reportBrief, checkSubmission } from './report.js';
 import { Skills, SkillError } from './skills.js';
@@ -53,17 +53,16 @@ function wakeEvents(state, agentId, since) {
 }
 
 // What the human already decided about the report, so agents do not ask again.
+// The reasons and the documents are on recon_write_report.
 function reportStatus(t) {
   const r = buildReport(t.store.state);
   const cfg = r.config;
   return {
-    shape: cfg.shape || 'not chosen yet: ask the human with recon_propose (combined or separate)',
-    signedBy: cfg.signOff || 'not set yet: ask the human whose name signs it',
-    path: cfg.path || '',
-    skill: t.skills.reportSkill(cfg.skill).name,
-    readyToReport: r.included.map((f) => f.title),
-    notReadyYet: r.excluded.slice(0, 8).map((x) => `${x.title}: ${x.reasons.join('; ')}`),
-    documents: r.documents.map((d) => `${d.name}: ${d.written ? (d.stale ? 'written, out of date' : 'written') : 'not written'}`),
+    shape: cfg.shape || 'not chosen: ask with recon_propose',
+    signedBy: cfg.signOff || 'not set: ask with recon_propose',
+    ready: r.included.map((f) => f.id),
+    notReady: r.excluded.map((f) => f.id),
+    due: r.missing.length + r.stale.length || undefined,
   };
 }
 
@@ -293,8 +292,13 @@ export function createHub(overrides = {}) {
     const all = suggest(t.store.state, { limit: 500 });
     const s = all.find((x) => x.id === params.id);
     if (params.verb === 'dismiss') {
+      if (t.store.state.project.dismissed.includes(params.id)) return { ok: true, already: true };
+      if (!s) throw new HttpError(404, `no current suggestion "${params.id}": the briefing lists the current ones`);
+      const reason = String(body?.reason || '').trim().slice(0, 300);
+      if (who !== 'human' && !reason) throw new HttpError(400, 'say why it does not apply (reason), so the human can see it');
       t.store.setProject({ dismissed: [...t.store.state.project.dismissed, params.id] }, who);
-      return { ok: true };
+      t.store.log({ by: who, action: 'note', kind: s.itemKind || 'project', itemId: s.itemId, summary: `dismissed "${s.title}"${reason ? `: ${reason}` : ''}` });
+      return { ok: true, dismissed: { id: s.id, title: s.title, reason: reason || undefined } };
     }
     if (params.verb !== 'accept') throw new HttpError(404, 'use accept or dismiss');
     if (!s) throw new HttpError(404, 'that suggestion is no longer current');
@@ -316,13 +320,13 @@ export function createHub(overrides = {}) {
     if (!id) throw new HttpError(400, 'send X-Recon-Agent: <name> (or ?agent=<name>) to get a briefing');
     const todo = mustDo(t.store.state, id);
     const b = briefing(t.store.state, id);
+    const left = whereWeLeftOff(t.store.state, id);
     return {
-      mustDo: todo,
       ...b,
       next: todo.length ? `${todo[0].do} (${todo[0].how})` : b.next,
-      beforeYouStop: beforeYouStop(t.store.state, id),
-      whereWeLeftOff: whereWeLeftOff(t.store.state, id),
-      skills: t.skills.list().map((s) => ({ id: s.id, name: s.name, description: s.description, use: s.use })),
+      mustDo: todo.map((x) => ({ kind: x.kind, id: x.id, do: x.do, how: x.how, urgent: x.urgent || undefined })),
+      openLeads: left.openLeads.map((l) => l.id),
+      skills: t.skills.list().map((s) => s.id),
       report: reportStatus(t),
     };
   });

@@ -98,6 +98,7 @@ export async function runAgent({ name, url, key, hunt = undefined, out = process
     '',
     'Talk to the human on the board, not only in this terminal',
     `  ${R} say "<update, answer or question>"            shows up in their Talk panel`,
+    `  ${R} dismiss <sg_id> "<why it does not apply>"     clear a suggestion from your briefing`,
     `  ${R} wait                                         when you are done or blocked: blocks until they write to you, then prints it`,
     '',
     'Before you stop: report back on every steer, record what is left as leads, offer the next moves with propose, then run wait instead of ending.',

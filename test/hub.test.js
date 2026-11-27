@@ -172,7 +172,7 @@ test('two agents on two projects at once: each writes to its own hunt, the board
   assert.deepEqual(eng.storeFor('vault-repo').list('target').map((t) => t.name), ['Vault']);
   assert.deepEqual(eng.storeFor('bridge-repo').list('target').map((t) => t.name), ['Bridge']);
   const briefing = await fetch(`${u}/api/briefing`, { headers: as('beta', 'bridge-repo') }).then((r) => r.json());
-  assert.equal(briefing.whereWeLeftOff.engagement.name, 'bridge-repo');
+  assert.equal(briefing.project, 'bridge-repo');
   eng.open(bridge.hunt.id);
   assert.deepEqual(h.tenant().store.list('target').map((t) => t.name), ['Bridge'], 'opening it shows the agent\'s work');
   await h.close();
@@ -222,5 +222,28 @@ test('wait: an idle agent wakes when the human writes to it from the board', asy
   const said = await (await fetch(`${base}/api/items/message`, { method: 'POST', headers: agent, body: JSON.stringify({ text: 'On it: oracle next.' }) })).json();
   assert.equal(said.kind, 'message');
   assert.deepEqual(said.to, ['human']);
+  await hub.close();
+});
+
+test('agents dismiss a suggestion that does not apply, with the reason', async () => {
+  const hub = createHub({ port: 0, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'recon-dismiss-')), seed: 'empty', demo: false, log: () => {} });
+  await hub.listen();
+  const base = `http://127.0.0.1:${hub.port}`;
+  const s = hub.tenant().store;
+  const t = s.create('target', { name: 'Perps', protocolType: 'perps', phase: 'hunting' }, 'human');
+  s.create('component', { targetId: t.id, name: 'Router.openPosition()' }, 'human');
+  const agent = { 'x-recon-agent': 'bot', 'content-type': 'application/json' };
+  const b = await (await fetch(`${base}/api/briefing`, { headers: agent })).json();
+  const liq = (await (await fetch(`${base}/api/suggestions?limit=50`)).json()).find((x) => /liquidation/i.test(x.title));
+  void b;
+  assert.ok(liq, 'liquidation is suggested');
+  const noReason = await fetch(`${base}/api/suggestions/${liq.id}/dismiss`, { method: 'POST', headers: agent, body: '{}' });
+  assert.equal(noReason.status, 400);
+  const ok = await (await fetch(`${base}/api/suggestions/${liq.id}/dismiss`, { method: 'POST', headers: agent, body: JSON.stringify({ reason: 'liquidations run on an external engine that is out of scope' }) })).json();
+  assert.equal(ok.ok, true);
+  const after = await (await fetch(`${base}/api/briefing`, { headers: agent })).json();
+  assert.ok(!after.suggestions.some((x) => x.id === liq.id));
+  assert.ok(s.state.activity.some((a) => a.by === 'ag_bot' && /dismissed .*external engine/.test(a.summary)), 'the human sees why');
+  assert.equal((await fetch(`${base}/api/suggestions/sg_nope/dismiss`, { method: 'POST', headers: agent, body: JSON.stringify({ reason: 'x' }) })).status, 404);
   await hub.close();
 });

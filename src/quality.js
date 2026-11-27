@@ -100,7 +100,8 @@ export function enforce(state, kind, next, changed, author, { created = false } 
   }
 
   if (kind === 'component' && changed.includes('reviewState') && next.reviewState === 'flagged') {
-    const hasHyp = Object.values(state.items.hypothesis).some((h) => h.componentId === next.id && h.status !== 'dropped');
+    const hasHyp = Object.values(state.items.hypothesis).some((h) => h.componentId === next.id && h.status !== 'dropped')
+      || Object.values(state.items.finding).some((f) => f.componentId === next.id);
     if (!hasHyp) throw new GateError(`flagging "${next.name}" needs a testable claim: add the hypothesis for it first (recon_add_hypothesis with componentId, or recon_coverage with a "hypothesis"), then flag it.`, 'flag-needs-hypothesis');
   }
 
