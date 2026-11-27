@@ -734,9 +734,12 @@ export function suggest(state, { limit = 10 } = {}) {
   }
 
   // flagged with nothing to show for it
-  const hypByComponent = new Set(Object.values(items.hypothesis).map((h) => h.componentId).filter(Boolean));
+  const workedOn = new Set([
+    ...Object.values(items.hypothesis).filter((h) => h.status !== 'dropped').map((h) => h.componentId),
+    ...Object.values(items.finding).map((f) => f.componentId),
+  ].filter(Boolean));
   for (const c of Object.values(items.component)) {
-    if (c.reviewState !== 'flagged' || hypByComponent.has(c.id)) continue;
+    if (c.reviewState !== 'flagged' || workedOn.has(c.id)) continue;
     push({
       id: sid('flag-to-hyp', c.id), rule: 'flagged-no-hypothesis', action: 'note', itemId: c.id, itemKind: 'component',
       score: 72 + PRIORITY_BONUS[c.priority || 'normal'],
@@ -814,8 +817,10 @@ export function suggest(state, { limit = 10 } = {}) {
     if (!comps.length || (t.phase || 'mapping') === 'mapping') continue;
     const pb = playbookFor(t);
     const hyps = Object.values(items.hypothesis).filter((h) => h.targetId === t.id);
+    // na anywhere on the target counts, including on an external part (someone else's engine)
+    const all = Object.values(items.component).filter((c) => c.targetId === t.id);
     for (const cls of pb.classes.slice(0, 5)) {
-      const touched = comps.some((c) => Object.entries(c.checklist || {}).some(([k, v]) => k.startsWith(`${cls.id}.`) && v.state !== 'unchecked'))
+      const touched = all.some((c) => Object.entries(c.checklist || {}).some(([k, v]) => (k === cls.id || k.startsWith(`${cls.id}.`)) && v.state !== 'unchecked'))
         || hyps.some((h) => (h.bugClass || '').toLowerCase().includes(cls.id.split('-')[0]));
       if (touched) continue;
       push({
@@ -838,88 +843,69 @@ function short(s, n = 70) {
 
 // ---------- agent briefing ----------
 
-// Everything an agent needs to act without waiting for instructions.
+// What an agent needs to act now: steers, disputed claims, the next action, and
+// ids. Everything else is one call away: the playbook on recon_playbook, notes and
+// scope on recon_get, lists on recon_list. The rules live in the tool description.
 export function briefing(state, agentId) {
   const items = state.items;
   const me = items.agent[agentId] || null;
   const mine = (s) => (s.to || []).includes('all') || (s.to || []).includes(agentId);
   const steers = Object.values(items.steer).filter((s) => s.state !== 'addressed' && mine(s))
     .sort((a, b) => priorityRank(b.priority) - priorityRank(a.priority) || a.createdAt - b.createdAt)
-    .map((s) => ({ ...s, item: describeRef(items, s.itemId) }));
+    .map((s) => ({ id: s.id, action: s.action, state: s.state, note: s.note, item: describeRef(items, s.itemId) }));
   const assignment = new Set(me?.assignment || []);
   const owned = Object.values(items.component).filter((c) => c.owner === agentId || assignment.has(c.id) || assignment.has(c.targetId));
-  const othersOwn = Object.values(items.component).filter((c) => c.owner && c.owner !== agentId).map((c) => ({ id: c.id, name: c.name, owner: c.owner }));
   const untouched = Object.values(items.component).filter((c) => isReviewable(c) && c.reviewState === 'untouched' && (!c.owner || c.owner === agentId))
-    .sort((a, b) => priorityRank(b.priority) - priorityRank(a.priority))
-    .map((c) => ({ id: c.id, name: c.name, targetId: c.targetId, priority: c.priority }));
+    .sort((a, b) => priorityRank(b.priority) - priorityRank(a.priority));
   const disputed = [];
   for (const kind of ['component', 'assumption', 'hypothesis', 'finding']) {
     for (const it of Object.values(items[kind])) {
-      if (it.verification === 'disputed' && (it.createdBy === agentId || !it.createdBy?.startsWith('ag_'))) disputed.push({ id: it.id, kind, label: it.name || it.text || it.title });
+      if (it.verification === 'disputed' && (it.createdBy === agentId || !it.createdBy?.startsWith('ag_'))) disputed.push({ id: it.id, kind, label: short(it.name || it.text || it.title, 80) });
     }
   }
-  const proposals = Object.values(items.proposal).filter((p) => p.createdBy === agentId)
-    .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 10)
-    .map((p) => ({ id: p.id, text: p.text, state: p.state }));
+  const decided = Object.values(items.proposal).filter((p) => p.createdBy === agentId)
+    .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 5)
+    .map((p) => ({ id: p.id, state: p.state, choice: p.choice || undefined }));
   const targets = Object.values(items.target).map((t) => {
-    const pb = playbookFor(t);
-    const phase = t.phase || 'mapping';
     const comps = Object.values(items.component).filter((c) => c.targetId === t.id);
     const linked = new Set(Object.values(items.relation || {}).filter((r) => r.targetId === t.id).flatMap((r) => [r.from, r.to]));
+    const loose = comps.filter((c) => !linked.has(c.id));
     return {
-      unconnected: comps.filter((c) => !linked.has(c.id)).map((c) => c.name),
-      id: t.id, name: t.name, chain: t.chain, protocolType: t.protocolType, playbooks: pb.types, priority: t.priority,
-      scope: { inScope: t.inScope || undefined, outOfScope: t.outOfScope || undefined, alreadyReported: (t.alreadyReported || []).length ? t.alreadyReported : undefined, disclosureChannel: t.disclosureChannel || undefined, severityScale: t.severityScale || undefined, bountyRules: t.bountyRules || undefined },
-      phase, phaseGoal: PHASES[phase], progress: phaseStatus(state, t.id),
-      map: {
-        components: comps.map((c) => ({ id: c.id, name: c.name, type: c.type, summary: c.summary || '' })),
-        relations: Object.values(items.relation || {}).filter((r) => r.targetId === t.id).map((r) => ({ from: items.component[r.from]?.name, to: items.component[r.to]?.name, type: r.type, label: r.label })),
-      },
-      developerAssumptionPrompts: phase === 'mapping' || phase === 'assumptions' ? pb.commonAssumptions : undefined,
-      playbook: { name: pb.name, startHere: pb.startHere, classes: pb.classes.map((c) => ({ id: c.id, name: c.name, checks: c.checks })) },
+      id: t.id, name: t.name, protocolType: t.protocolType, playbooks: playbookFor(t).types,
+      phase: t.phase || 'mapping', progress: phaseStatus(state, t.id),
+      unconnected: loose.length ? loose.slice(0, 8).map((c) => c.id) : undefined,
     };
   });
   const mappingT = targets.find((t) => t.phase === 'mapping');
   const assumingT = targets.find((t) => t.phase === 'assumptions');
-  const suggestions = suggest(state, { limit: 6 });
+  const suggestions = suggest(state, { limit: 5 });
   let next;
-  if (state.project.example) next = 'This board only holds the built-in example. Start the real engagement first (recon_start_engagement, or `recon start "<name>"`), then add the target you are researching and its components.';
-  else if (steers.some((s) => s.state === 'open')) next = 'Acknowledge your open steers first (recon_steer with state=acknowledged), then work them.';
+  if (state.project.example) next = 'This board only holds the built-in example. Start the real engagement first (recon_start_engagement), then add the target you are researching.';
+  else if (steers.some((s) => s.state === 'open')) next = 'Acknowledge your open steers first (recon_steer state=acknowledged), then work them.';
   else if (steers.length) next = 'Work your acknowledged steers and mark them addressed with a short response.';
   else if (disputed.length) next = 'A human disputed one of your claims. Revisit the evidence and either strengthen it or retract.';
   else if (!targets.length) next = 'Add the target you are researching (recon_add_target), with its protocol type.';
-  else if (mappingT) next = `Phase 1, map "${mappingT.name}" before hunting (${mappingT.progress.components} parts, ${mappingT.progress.actors} actors, ${mappingT.progress.externals} external, ${mappingT.progress.relations} connections so far${mappingT.unconnected.length ? `; not connected to anything yet: ${mappingT.unconnected.slice(0, 8).join(', ')}` : ''}): run recon_scan on the source for a first map of who calls what, then use recon_map to add what the scan cannot see (off-chain actors, admins, trust) and a one-line summary per part. Every part must connect to something. Then set the phase to "assumptions" (recon_phase).`;
-  else if (assumingT) next = `Phase 2, write down what "${assumingT.name}"'s developers assume: who is trusted, which invariants must hold, what inputs and tokens they expect, what external systems they rely on. Record each with recon_add_assumption origin="developer" and a category; use developerAssumptionPrompts as a starting list and keep only the ones this code actually makes. Then set the phase to "hunting".`;
+  else if (mappingT) {
+    const p = mappingT.progress;
+    next = `Phase 1, map "${mappingT.name}" (${p.components} parts, ${p.relations} connections${mappingT.unconnected ? `, ${mappingT.unconnected.length}${mappingT.unconnected.length === 8 ? '+' : ''} unconnected` : ''}): recon_scan the source, then recon_map what the scan cannot see. Every part must connect to something. Then recon_phase "assumptions".`;
+  } else if (assumingT) next = `Phase 2, record what "${assumingT.name}"'s developers assume (recon_add_assumption origin="developer"); recon_playbook lists the usual ones for ${assumingT.playbooks.join(' + ')}. Then recon_phase "hunting".`;
   else if (owned.some((c) => c.reviewState !== 'reviewed')) next = 'Continue on the components you own or were assigned.';
-  else if (suggestions.length) next = `Propose your next move (recon_propose). A good candidate: "${suggestions[0].title}".`;
-  else next = 'Everything is covered. Propose deeper checks or new hypotheses.';
+  else if (suggestions.length) next = `${suggestions[0].title} (suggestion ${suggestions[0].id}). If it does not apply, recon_dismiss it with the reason.`;
+  else next = 'Everything is covered. Propose deeper checks or new hypotheses (recon_propose).';
 
   return {
-    you: me ? { id: me.id, name: me.name, focus: me.focus, assignment: me.assignment } : { id: agentId },
+    you: me ? { id: me.id, name: me.name } : { id: agentId },
     project: state.project.name,
-    example: Boolean(state.project.example),
+    example: Boolean(state.project.example) || undefined,
     next,
     steers,
     disputed,
-    yourComponents: owned.map((c) => ({ id: c.id, name: c.name, reviewState: c.reviewState, targetId: c.targetId })),
-    ownedByOthers: othersOwn,
-    untouched: untouched.slice(0, 25),
-    yourProposals: proposals,
-    existing: {
-      findings: Object.values(items.finding).map((f) => ({ id: f.id, title: f.title, severity: f.severity, stage: f.stage, componentId: f.componentId, by: f.createdBy })),
-      hypotheses: Object.values(items.hypothesis).map((x) => ({ id: x.id, text: x.text, status: x.status, componentId: x.componentId, by: x.createdBy })),
-    },
-    suggestions: suggestions.map(({ id, title, why, action, itemId, itemKind }) => ({ id, title, why, action, itemId, itemKind })),
+    yourComponents: owned.map((c) => ({ id: c.id, reviewState: c.reviewState })),
+    untouched: untouched.slice(0, 15).map((c) => c.id),
+    claimedByOthers: Object.values(items.component).filter((c) => c.owner && c.owner !== agentId).map((c) => c.id),
+    yourProposals: decided,
+    suggestions: suggestions.map(({ id, title, action, itemId }) => ({ id, title, action, itemId })),
     targets,
-    rules: [
-      'Work in order for every target: map the system, then record the developers\' assumptions, then hunt. Do not skip to vulnerabilities.',
-      'Attach evidence (file:line, function, tx hash) to every claim. Unbacked claims get disputed.',
-      'Do not set verification or priority; those belong to the human.',
-      'Do not overwrite components owned by another agent. Add evidence instead.',
-      'Steers never block you. Acknowledge quickly, address when you get there.',
-      'When unsure what to do next, propose it instead of waiting or guessing.',
-      'Before adding a hypothesis or finding, check existing.findings and existing.hypotheses. If it is already there, add evidence to it instead of filing a duplicate.',
-    ],
   };
 }
 

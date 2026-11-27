@@ -46,7 +46,7 @@ these instructions in its `initialize` response.
 
 | tool | what it does |
 | --- | --- |
-| `recon_briefing` | Start here. Open steers for you, your disputed claims, components you own, untouched surface, the playbook per target, suggested next moves, the rules. |
+| `recon_briefing` | Start here. Ids, not notes: open steers for you, your disputed claims, the next action and your mustDo list, components you own, untouched components, suggestions, open leads, each target's phase. The rules are in the tool description; the playbook is on `recon_playbook`. |
 | `recon_list` | List items of a kind with an optional exact-match filter. |
 | `recon_get` | One item by id **or name**, with evidence, history and (components) the checklist with check ids. |
 | `recon_add_target` | A target and, optionally, its components in one call. `protocolType` picks the playbook. |
@@ -65,6 +65,7 @@ these instructions in its `initialize` response.
 | `recon_scan` | Read the Solidity source and put a first architecture map on the board: contracts, who calls what, transfers, roles. |
 | `recon_map` | Add parts and connections by name (what the scan cannot see: off-chain actors, trust). |
 | `recon_wait` | Instead of ending its turn, the agent listens: returns the moment the human writes to it from the board or decides one of its proposals. |
+| `recon_dismiss` | Clear a suggestion that does not apply here, with the reason (shown to the human). |
 | `recon_say` | Tell the human something on the board (their Talk panel). |
 | `recon_skill` | The human's skills: list them, or get one's instructions. Also served as MCP prompts. |
 | `recon_write_report` | The report brief: the human's report skill as your system prompt, plus every fact it asks for. |

@@ -38,7 +38,16 @@ const en = (name, description) => ({ type: 'string', enum: ENUMS[name], descript
 export const TOOLS = [
   {
     name: 'recon_briefing',
-    description: 'Start here, and call again whenever you finish a task. Returns the human\'s open steers for you (act on these first), claims of yours the human disputed, components you own, untouched attack surface, the protocol playbook for each target (usual exploit classes and checks), suggested next moves, and the rules of the board.',
+    description: `Start here, and call again whenever you finish a task. Returns ids, not notes: the human's open steers for you, claims of yours the human disputed, the next action and your mustDo list, components you own, untouched components, suggestions, open leads, and each target's phase and progress. Read an item with recon_get, a protocol's exploit classes and checks with recon_playbook, lists with recon_list.
+Rules of the board:
+1. Work every target in order: map the system, record the developers' assumptions, then hunt. Do not skip to vulnerabilities.
+2. Attach evidence (file:line, function, tx hash, test) to every claim. Unbacked claims get disputed.
+3. Do not set verification or priority; those belong to the human.
+4. Do not overwrite components another agent claimed. Add evidence instead.
+5. Acknowledge steers at once; address them when you get there.
+6. Before filing a hypothesis or finding, recon_list what exists; add evidence to a match instead of filing a duplicate.
+7. When unsure what to do next, recon_propose it. A suggestion that does not apply: recon_dismiss it with the reason.
+8. Before you stop: report back on every steer, record what is left as leads, end with a recon_propose of next moves, then recon_wait.`,
     inputSchema: { type: 'object', properties: {} },
     run: (c) => c.briefing(),
   },
@@ -169,7 +178,7 @@ export const TOOLS = [
         reviewState: en('reviewState', 'untouched | scanning | reviewed (nothing found) | flagged (something smells)'),
         reasoning: str('What you checked and concluded'),
         evidence: evidenceSchema,
-        checklist: { type: 'object', description: 'checklist id (from recon_get) -> checked | na | unchecked', additionalProperties: { type: 'string', enum: ENUMS.checkState } },
+        checklist: { type: 'object', description: 'checklist id (from recon_get, e.g. "liquidation.0") -> checked | na | unchecked. A class id alone ("liquidation": "na") rules out the whole class for this target', additionalProperties: { type: 'string', enum: ENUMS.checkState } },
         hypothesis: {
           type: 'object', description: 'Required when flagging: the testable claim behind the smell. Created on this component before the flag.',
           properties: { text: str('The suspected bug'), bugClass: str('e.g. reentrancy'), confidence: en('confidence', 'low | med | high'), exploitStage: en('exploitStage', 'capability | trigger | full') },
@@ -414,6 +423,12 @@ export const TOOLS = [
     description: 'The human\'s skills: reusable instructions they keep for agents (how they want reports written, how they audit a protocol type, house rules). Without a name, lists them; with a name, returns the instructions to follow. The briefing lists them too.',
     inputSchema: { type: 'object', properties: { name: str('Skill id or name') } },
     run: async (c, a) => (a.name ? c.skill(a.name) : (await c.skills()).skills.map(({ id, name, description, use }) => ({ id, name, description, use }))),
+  },
+  {
+    name: 'recon_dismiss',
+    description: 'Clear a suggestion from the briefing that does not apply here, with the reason, e.g. "liquidation is done by an external engine that is out of scope". The human sees the reason in the activity feed. It stays dismissed. To rule out a whole exploit class on one part, set its checklist entry to na with recon_coverage instead.',
+    inputSchema: { type: 'object', properties: { id: str('Suggestion id from the briefing (sg_...)'), reason: str('Why it does not apply') }, required: ['id', 'reason'] },
+    run: (c, a) => c.dismiss(a.id, a.reason),
   },
   {
     name: 'recon_say',
