@@ -7,6 +7,12 @@ import { createClient, defaultUrl, ReconError } from '../src/client.js';
 
 const HELP = `recon - a shared cockpit where you and your agents hunt vulnerabilities together
 
+one-line setup
+  recon setup                           add recon's tools to every agent cli found (claude code, codex,
+                                        gemini, opencode, cursor, windsurf, claude desktop), open the board.
+                                        --here also adds it to project-scoped clients (grok) in this folder
+  recon agent [--as NAME]               for agents: start the board if needed and print how to use it
+
 run the hub
   recon serve [--port 4317] [--data ./.recon] [--watch file.json|url]... [--empty] [--no-demo]
               [--mode local|server|multi] [--host 127.0.0.1] [--key KEY] [--open]
@@ -47,6 +53,7 @@ move data
   recon push <file.json>                merge a json document into the board
   recon export [file.json]              the whole project (stdout if no file)
   recon import <file.json>              replace the project with an export
+  recon start <name>                    replace the example with a real engagement (agents may do this)
   recon reset [--example] [--name N]    start over (empty, or the example)
 
 global
@@ -174,18 +181,10 @@ async function serve() {
     `    http     ${dim(`curl ${hub.url}/api/briefing -H 'X-Recon-Agent: my-agent'`)}`,
     '',
   ].join('\n'));
-  if (flags.open) openBrowser(hub.url);
+  if (flags.open) (await import('../src/launch.js')).openBrowser(hub.url);
   const stop = async () => { process.stderr.write('\n  saving and shutting down…\n'); await hub.close(); process.exit(0); };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
-}
-
-function openBrowser(url) {
-  import('node:child_process').then(({ spawn }) => {
-    const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
-    const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
-    try { spawn(opener, args, { stdio: 'ignore', detached: true }).unref(); } catch { /* ignore */ }
-  });
 }
 
 async function mcp() {
@@ -278,7 +277,7 @@ async function add() {
     case 'target': {
       fields = { name: need(text, 'name'), protocolType: flags.type || 'other', chain: flags.chain, description: flags.description, scope: flags.scope };
       const t = await api.create('target', clean(fields));
-      const comps = many(flags.components).flatMap((s) => String(s).split(',')).map((s) => s.trim()).filter(Boolean);
+      const comps = many(flags.components).flatMap((s) => String(s).split(/[,;\n](?![^(]*\))/)).map((s) => s.trim()).filter(Boolean);
       for (const name of comps) await api.create('component', { targetId: t.id, name, type: /\(.*\)/.test(name) ? 'function' : 'contract' });
       out(t, () => `added target ${bold(t.name)} ${dim(t.id)}${comps.length ? ` with ${comps.length} components` : ''}`);
       return;
@@ -470,6 +469,22 @@ async function reset() {
   process.stderr.write(flags.example ? 'loaded the example project\n' : 'started a new, empty engagement\n');
 }
 
+async function setup() {
+  const { runSetup } = await import('../src/setup.js');
+  const only = flags.only ? String(flags.only).split(',') : null;
+  await runSetup({ url: flags.url, key: flags.key ?? process.env.RECON_KEY, open: flags.open !== false, only, here: Boolean(flags.here) });
+}
+
+async function agentCmd() {
+  const { runAgent } = await import('../src/setup.js');
+  await runAgent({ name: agentName, url: flags.url, key: flags.key ?? process.env.RECON_KEY });
+}
+
+async function start() {
+  const r = await client().start(need(pos.join(' '), 'engagement name'));
+  out(r, () => (r.existing ? `already working on "${r.project.name}"` : `started "${r.project.name}". add the target next: recon add target "<name>" --type <protocol type>`));
+}
+
 async function model() {
   out(await client().model(), (m) => Object.entries(m.kinds).map(([k, fields]) => `${bold(k)}\n${Object.entries(fields).map(([f, s]) => `  ${f.padEnd(14)} ${s.type}${s.enum ? ` ${dim(s.enum.join(' | '))}` : ''}${s.required ? ' required' : ''}${s.owner === 'human-only' ? ` ${COLORS.flagged('human only')}` : ''}`).join('\n')}`).join('\n\n'));
 }
@@ -483,7 +498,7 @@ const COMMANDS = {
   steers, ack: () => steerVerb('ack'), address: () => steerVerb('address'), steer,
   verify: () => verdict('verified'), dispute: () => verdict('disputed'), unverify: () => verdict('unverified'),
   accept: () => decide('accept'), decline: () => decide('decline'),
-  suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
+  setup, agent: agentCmd, start, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
 };
 
 async function main() {

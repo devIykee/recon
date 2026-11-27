@@ -52,7 +52,8 @@ test('briefing tells an agent what to do next', () => {
   seedExample(s);
   const b = briefing(s.state, 'ag_scout');
   assert.equal(b.steers.length, 1);
-  assert.match(b.next, /Acknowledge/);
+  assert.match(b.next, /example/);
+  assert.equal(b.example, true);
   assert.ok(b.targets[0].playbook.classes.length);
   assert.equal(b.yourComponents.length, 2);
 });

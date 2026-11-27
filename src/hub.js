@@ -297,6 +297,20 @@ export function createHub(overrides = {}) {
     return { ok: true };
   });
 
+  // Anyone, agents included, may replace the example with a real engagement. A real one is never wiped this way.
+  route('POST', '/api/start', ({ t, body, who }) => {
+    const name = String(body?.name || '').trim().slice(0, 120);
+    if (!name) throw new HttpError(400, 'give the engagement a name');
+    if (!t.store.state.project.example) {
+      if (t.store.state.project.name === name) return { ok: true, project: t.store.state.project, existing: true };
+      throw new HttpError(409, `a real engagement ("${t.store.state.project.name}") is already on the board. add targets to it instead.`);
+    }
+    seedEmpty(t.store, name);
+    t.store.log({ by: who, action: 'note', kind: 'project', summary: `started the engagement "${name}"` });
+    t.store.flush();
+    return { ok: true, project: t.store.state.project };
+  });
+
   route('POST', '/api/reset', ({ t, body, who }) => {
     if (who !== 'human') throw new HttpError(403, 'only a human resets the project');
     if (body?.mode === 'example') seedExample(t.store);

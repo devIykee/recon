@@ -63,6 +63,7 @@ export function createClient({ url = defaultUrl(), key = process.env.RECON_KEY, 
     exportProject: () => req('GET', '/api/export'),
     importProject: (doc) => req('POST', '/api/import', doc),
     reset: (mode, name) => req('POST', '/api/reset', { mode, name }),
+    start: (name) => req('POST', '/api/start', { name }),
 
     // Resolve "cp_abc", or a name/title like "Vault.withdraw()", to {kind, item}.
     async resolve(ref, kindHint) {

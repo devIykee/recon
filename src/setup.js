@@ -1,0 +1,204 @@
+// One-line setup.
+//
+//   recon agent   paste-into-any-agent path: makes sure the board is running, then
+//                 prints instructions the agent follows through its shell. No config,
+//                 no restart; works in any agent that can run commands.
+//   recon setup   install-once path: registers recon's MCP tools in every agent CLI
+//                 found on this machine, starts the board and opens it.
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { installCopy, ensureHub, openBrowser, reconHome, GITHUB_SPEC } from './launch.js';
+import { createClient } from './client.js';
+import { ENUMS } from './model.js';
+
+export const PASTE_LINE = `Run \`npx -y ${GITHUB_SPEC} agent\` and follow its instructions to do this security review with me on the recon board.`;
+
+const quote = (s) => (/^[\w./:@=+-]+$/.test(s) ? s : JSON.stringify(s));
+
+// ---------- recon agent ----------
+
+export async function runAgent({ name, url, key, out = process.stdout, err = process.stderr }) {
+  const { bin, shim } = installCopy();
+  const hub = await ensureHub({ url, key, bin, log: (m) => err.write(`${m}\n`) });
+  const who = name || '<your-name>';
+  const R = `${quote(shim)} --as ${who}`;
+  let state = null;
+  try { state = await createClient({ url: hub.url, key }).state(); } catch { /* board still fine */ }
+  const lines = [
+    `recon is ready. Tell the human: the live board is at ${hub.url} (open it to watch, verify and steer).`,
+    '',
+    'You are now an agent on a shared security-research board. The human watches it live,',
+    'verifies or disputes your claims, and leaves steers for you. Use the recon CLI below.',
+    name ? `Your name on the board is "${name}".` : 'Pick a short name for yourself (e.g. claude-code, opencode, grok, codex) and use it in place of <your-name>.',
+    'If your tools already include recon_* MCP tools, you may use those instead; they do the same things.',
+    '',
+    `  R = ${R}`,
+    '',
+    'Start',
+    `  ${R} briefing                    what to do next: steers for you, untouched surface, the playbook`,
+    `  ${R} start "<engagement name>"   only if the briefing says the board holds the example`,
+    `  ${R} add target "<name>" --type <${ENUMS.protocolType.join('|')}> --components "A.f(), B.g(), C"`,
+    '',
+    'Work loop (call briefing again between tasks)',
+    `  ${R} ack <steerId>                                   acknowledge every open steer right away`,
+    `  ${R} focus "<what you are doing>" --item "<component>"`,
+    `  ${R} coverage "<component>" scanning                 when you start on a part (claims it)`,
+    `  ${R} coverage "<component>" reviewed --reasoning "<what you checked>" --evidence "<file:line>|<what it shows>"`,
+    `  ${R} coverage "<component>" flagged --reasoning "<what smells>" --evidence "..."`,
+    `  ${R} get "<component>"                               see its playbook checklist and check ids`,
+    `  ${R} check "<component>" <checkId>                   tick a checklist item (or: na)`,
+    `  ${R} add assumption "<what you take for granted>" --component "<component>" --rationale "<why>"`,
+    `  ${R} add hypothesis "<suspected bug>" --component "<component>" --class <bug-class> --confidence <low|med|high> --evidence "..."`,
+    `  ${R} set <hypothesisId> status=confirmed             (or status=dropped dropReason="<why not>")`,
+    `  ${R} add finding "<title>" --severity <critical|high|medium|low|info> --component "<component>" --hypothesis <id> --repro "<steps>" --evidence "..."`,
+    `  ${R} address <steerId> "<what you did or found>"     report back on a steer`,
+    `  ${R} propose "<next move>" --rationale "<why>"       when unsure what to do next, instead of stopping`,
+    '',
+    'Rules',
+    '  - Back every claim with evidence (file:line, function, tx). Unbacked claims get disputed, and disputes come back to you as steers.',
+    '  - Never set verification or priority: those are the human\'s.',
+    '  - Do not overwrite components another agent owns; add evidence instead.',
+    '  - Steers never require you to stop. Acknowledge fast, address when you get there.',
+    '  - Names work wherever ids do, e.g. "Vault.withdraw()".',
+  ];
+  if (state) {
+    const comps = Object.values(state.items.component);
+    lines.push('', `Board now: "${state.project.name}"${state.project.example ? ' (the built-in example: start your own engagement first)' : ''}, ${Object.keys(state.items.target).length} target(s), ${comps.length} component(s), ${Object.values(state.items.steer).filter((s) => s.state === 'open').length} open steer(s), ${Object.keys(state.items.agent).length} agent(s).`);
+  }
+  lines.push('', `Next: run \`${R} briefing\`.`);
+  out.write(`${lines.join('\n')}\n`);
+  return hub;
+}
+
+// ---------- recon setup ----------
+
+function has(cmd) {
+  const r = spawnSync(process.platform === 'win32' ? 'where' : 'command', process.platform === 'win32' ? [cmd] : ['-v', cmd], { shell: process.platform !== 'win32', stdio: 'ignore' });
+  return r.status === 0;
+}
+
+function run(cmd, args) {
+  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 60_000, shell: process.platform === 'win32' });
+  return { ok: r.status === 0, out: `${r.stdout || ''}${r.stderr || ''}`.trim() };
+}
+
+function readJson(file) {
+  if (!fs.existsSync(file)) return {};
+  const raw = fs.readFileSync(file, 'utf8').trim();
+  if (!raw) return {};
+  try { return JSON.parse(raw); } catch { return JSON.parse(raw.replace(/^\s*\/\/.*$/gm, '').replace(/,(\s*[}\]])/g, '$1')); }
+}
+
+function writeJson(file, data) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak`);
+  fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+}
+
+// Clients that keep MCP servers under { "mcpServers": { name: { command, args } } }.
+function mcpServersFile(file, entry) {
+  const doc = readJson(file);
+  doc.mcpServers = { ...(doc.mcpServers || {}), recon: entry };
+  writeJson(file, doc);
+}
+
+export function clients(home = os.homedir()) {
+  const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+  const desktop = process.platform === 'darwin'
+    ? path.join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json')
+    : process.platform === 'win32' ? path.join(appData, 'Claude', 'claude_desktop_config.json') : path.join(home, '.config', 'Claude', 'claude_desktop_config.json');
+  const opencodeFile = path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'opencode', 'opencode.json');
+  return [
+    {
+      id: 'claude-code', label: 'Claude Code', present: () => has('claude'),
+      register: (cmd, args) => {
+        run('claude', ['mcp', 'remove', '-s', 'user', 'recon']);
+        return run('claude', ['mcp', 'add', '-s', 'user', 'recon', '--', cmd, ...args]);
+      },
+    },
+    {
+      id: 'codex', label: 'Codex CLI', present: () => has('codex'),
+      register: (cmd, args) => {
+        run('codex', ['mcp', 'remove', 'recon']);
+        return run('codex', ['mcp', 'add', 'recon', '--', cmd, ...args]);
+      },
+    },
+    {
+      id: 'gemini', label: 'Gemini CLI', present: () => has('gemini'),
+      register: (cmd, args) => {
+        run('gemini', ['mcp', 'remove', '-s', 'user', 'recon']);
+        return run('gemini', ['mcp', 'add', '-s', 'user', 'recon', cmd, '--', ...args]);
+      },
+    },
+    {
+      id: 'opencode', label: 'OpenCode', present: () => has('opencode') || fs.existsSync(path.dirname(opencodeFile)),
+      register: (cmd, args) => {
+        const doc = readJson(opencodeFile);
+        if (!doc.$schema) doc.$schema = 'https://opencode.ai/config.json';
+        doc.mcp = { ...(doc.mcp || {}), recon: { type: 'local', command: [cmd, ...args], enabled: true } };
+        writeJson(opencodeFile, doc);
+        return { ok: true, out: opencodeFile };
+      },
+    },
+    {
+      // Grok CLI only reads MCP servers from the project's .grok/settings.json.
+      id: 'grok', label: 'Grok CLI', present: () => has('grok'), projectOnly: true,
+      register: (cmd, args, { here }) => {
+        if (!here) return { ok: false, skip: true, out: 'keeps MCP servers per project: run `recon setup --here` inside the project, or paste the agent line below' };
+        run('grok', ['mcp', 'remove', 'recon']);
+        return run('grok', ['mcp', 'add-json', 'recon', JSON.stringify({ command: cmd, args })]);
+      },
+    },
+    {
+      id: 'cursor', label: 'Cursor', present: () => fs.existsSync(path.join(home, '.cursor')),
+      register: (cmd, args) => { const f = path.join(home, '.cursor', 'mcp.json'); mcpServersFile(f, { command: cmd, args }); return { ok: true, out: f }; },
+    },
+    {
+      id: 'windsurf', label: 'Windsurf', present: () => fs.existsSync(path.join(home, '.codeium', 'windsurf')),
+      register: (cmd, args) => { const f = path.join(home, '.codeium', 'windsurf', 'mcp_config.json'); mcpServersFile(f, { command: cmd, args }); return { ok: true, out: f }; },
+    },
+    {
+      id: 'claude-desktop', label: 'Claude Desktop', present: () => fs.existsSync(path.dirname(desktop)),
+      register: (cmd, args) => { mcpServersFile(desktop, { command: cmd, args }); return { ok: true, out: desktop }; },
+    },
+  ];
+}
+
+export async function runSetup({ url, key, open = true, only = null, here = false, err = process.stderr, out = process.stdout }) {
+  const say = (s = '') => out.write(`${s}\n`);
+  const { bin, shim, app } = installCopy();
+  say('');
+  say(`  recon setup`);
+  say('');
+  say(`  ✓ installed            ${app}`);
+  say(`  ✓ command              ${shim}`);
+  const results = [];
+  for (const c of clients()) {
+    if (only && !only.includes(c.id)) continue;
+    if (!c.present()) { say(`  · ${c.label.padEnd(20)} not found`); continue; }
+    let r;
+    try { r = c.register(process.execPath, [bin, 'mcp', '--name', c.id], { here }); } catch (e) { r = { ok: false, out: e.message }; }
+    results.push({ ...c, ...r });
+    if (r.skip) say(`  · ${c.label.padEnd(20)} ${r.out}`);
+    else say(r.ok ? `  ✓ ${c.label.padEnd(20)} recon tools added${c.projectOnly ? ' (this project)' : ''}` : `  ✗ ${c.label.padEnd(20)} could not register: ${r.out.split('\n').slice(-1)[0]}`);
+  }
+  const hub = await ensureHub({ url, key, bin, log: () => {} });
+  say(`  ✓ board                ${hub.url}${hub.started ? '' : ' (already running)'}`);
+  if (open && process.env.RECON_NO_OPEN !== '1') openBrowser(hub.url);
+  say('');
+  if (results.some((r) => r.ok)) {
+    say('  Restart your agent (or open a new session) so it loads the recon tools, then tell it:');
+    say('    "Use recon: call recon_briefing and work the board with me."');
+    say('');
+  }
+  say('  Any agent with a terminal, no restart needed. Paste this into its chat:');
+  say(`    ${PASTE_LINE}`);
+  say('');
+  say(`  Not listed? Add an MCP server with command "${process.execPath}" and args ["${bin}", "mcp", "--name", "my-agent"].`);
+  say('');
+  void err; void reconHome;
+  return { hub, results };
+}

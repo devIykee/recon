@@ -37,6 +37,12 @@ export const TOOLS = [
     run: (c) => c.briefing(),
   },
   {
+    name: 'recon_start_engagement',
+    description: 'Start a real engagement when the board only holds the built-in example (recon_briefing says so). Name it after what you are researching. It never wipes a real engagement.',
+    inputSchema: { type: 'object', properties: { name: str('e.g. "Acme Vault review"') }, required: ['name'] },
+    run: (c, a) => c.start(a.name),
+  },
+  {
     name: 'recon_list',
     description: 'List items of one kind, optionally filtered by a field (e.g. kind=component, targetId=..., reviewState=untouched).',
     inputSchema: {
@@ -253,7 +259,7 @@ export const TOOLS = [
 ];
 
 const INSTRUCTIONS = `recon is a shared board where you and a human research vulnerabilities together.
-Start with recon_briefing. Acknowledge the human's steers right away (recon_steer), then work them.
+Start with recon_briefing (if it says the board holds the example, call recon_start_engagement first). Acknowledge the human's steers right away (recon_steer), then work them.
 Record as you go: recon_coverage for what you reviewed, recon_add_assumption for what you take for granted,
 recon_add_hypothesis for suspected bugs, recon_add_finding once confirmed. Attach evidence (file:line, function,
 tx) to every claim; the human verifies or disputes claims and disputed ones come back to you.
@@ -290,17 +296,25 @@ export async function runMcp({ name = process.env.RECON_AGENT || 'agent', url, k
   let client = createClient({ url: hubUrl, key, agent: name, transport: 'mcp', model });
   let embedded = null;
 
-  // Reach the hub, or start one in-process when running locally with defaults.
+  // Reach the hub. Locally, start one in the background so the board outlives this
+  // agent session; fall back to an in-process hub if that is not possible.
   async function ensureHub() {
     try { await client.health(); return; } catch (err) {
       const local = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(hubUrl);
-      if (!embed || !local || url) { log(`recon mcp: ${err.message}`); return; }
+      if (!embed || !local) { log(`recon mcp: ${err.message}`); return; }
+    }
+    try {
+      const { ensureHub: launch } = await import('./launch.js');
+      await launch({ url: hubUrl, key, log });
+      return;
+    } catch (err) {
+      log(`recon mcp: could not start a background hub (${err.message}); running one in-process`);
     }
     const { createHub } = await import('./hub.js');
     const port = Number(new URL(hubUrl).port || 4317);
     embedded = createHub({ port, log });
     await embedded.listen();
-    log(`recon mcp: started a local hub at ${embedded.url} (open it in a browser to watch)`);
+    log(`recon mcp: started a local hub at ${embedded.url}`);
     client = createClient({ url: embedded.url, key, agent: name, transport: 'mcp', model });
   }
 

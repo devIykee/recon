@@ -583,7 +583,8 @@ export function briefing(state, agentId) {
   });
   const suggestions = suggest(state, { limit: 6 });
   let next;
-  if (steers.some((s) => s.state === 'open')) next = 'Acknowledge your open steers first (recon_steer with state=acknowledged), then work them.';
+  if (state.project.example) next = 'This board only holds the built-in example. Start the real engagement first (recon_start_engagement, or `recon start "<name>"`), then add the target you are researching and its components.';
+  else if (steers.some((s) => s.state === 'open')) next = 'Acknowledge your open steers first (recon_steer with state=acknowledged), then work them.';
   else if (steers.length) next = 'Work your acknowledged steers and mark them addressed with a short response.';
   else if (disputed.length) next = 'A human disputed one of your claims. Revisit the evidence and either strengthen it or retract.';
   else if (owned.some((c) => c.reviewState !== 'reviewed')) next = 'Continue on the components you own or were assigned.';
@@ -593,6 +594,7 @@ export function briefing(state, agentId) {
   return {
     you: me ? { id: me.id, name: me.name, focus: me.focus, assignment: me.assignment } : { id: agentId },
     project: state.project.name,
+    example: Boolean(state.project.example),
     next,
     steers,
     disputed,

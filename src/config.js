@@ -1,12 +1,13 @@
 // One hub, three deployments. Only configuration differs:
 //
-//   local  (default) - binds 127.0.0.1, no key, data in ./.recon. Data never leaves the machine.
+//   local  (default) - binds 127.0.0.1, no key, data in ~/.recon/data. Data never leaves the machine.
 //   server           - self-hosted (docker/vps). Binds 0.0.0.0 and requires RECON_KEY.
 //   multi            - multi-tenant. Keys map to tenants via RECON_KEYS_FILE; each tenant
 //                      gets its own isolated store (and its own encrypted file, if a key is set).
 
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -19,7 +20,7 @@ export function loadConfig(overrides = {}, env = process.env) {
     mode,
     host: overrides.host || env.RECON_HOST || (mode === 'local' ? '127.0.0.1' : '0.0.0.0'),
     port: Number(overrides.port ?? env.RECON_PORT ?? env.PORT ?? DEFAULT_PORT),
-    dataDir: path.resolve(overrides.dataDir || env.RECON_DATA || path.join(process.cwd(), '.recon')),
+    dataDir: path.resolve(overrides.dataDir || env.RECON_DATA || path.join(env.RECON_HOME || path.join(os.homedir(), '.recon'), 'data')),
     key: overrides.key ?? env.RECON_KEY ?? null,
     keysFile: overrides.keysFile || env.RECON_KEYS_FILE || null,
     encryptionKey: overrides.encryptionKey ?? env.RECON_ENCRYPTION_KEY ?? null,

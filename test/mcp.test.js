@@ -73,6 +73,16 @@ test('agent works the board through tools, by name', async () => {
   assert.equal(agent.focusItem, cov.data.id);
 });
 
+test('agents may replace the example, never a real engagement', async () => {
+  const r = await rpc.tool('recon_start_engagement', { name: 'Real audit' });
+  assert.equal(r.isError, false);
+  assert.equal(hub.tenant().store.state.project.example, false);
+  const again = await rpc.tool('recon_start_engagement', { name: 'Another audit' });
+  assert.equal(again.isError, true);
+  assert.match(again.text, /already on the board/);
+  await fetch(`http://127.0.0.1:${hub.port}/api/reset`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'example' }) });
+});
+
 test('human-owned fields are refused with a helpful error', async () => {
   const r = await rpc.tool('recon_update', { ref: 'InterestRateModel', fields: { verification: 'verified' } });
   assert.equal(r.isError, true);
@@ -84,7 +94,7 @@ test('steer round trip and proposals through mcp', async () => {
   const st = store.create('steer', { action: 'cover', note: 'check the flash loan path', to: ['ag_tester'] }, 'human');
   const b = await rpc.tool('recon_briefing');
   assert.equal(b.data.steers[0].id, st.id);
-  assert.match(b.data.next, /Acknowledge/);
+  assert.match(b.data.next, /example|Acknowledge/);
   await rpc.tool('recon_steer', { steerId: st.id, state: 'acknowledged' });
   const done = await rpc.tool('recon_steer', { steerId: st.id, state: 'addressed', response: 'covered, nothing found' });
   assert.equal(done.data.state, 'addressed');
