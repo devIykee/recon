@@ -247,3 +247,30 @@ test('agents dismiss a suggestion that does not apply, with the reason', async (
   assert.equal((await fetch(`${base}/api/suggestions/sg_nope/dismiss`, { method: 'POST', headers: agent, body: JSON.stringify({ reason: 'x' }) })).status, 404);
   await hub.close();
 });
+
+test('a steer sent in the hunt on screen reaches an agent working in another hunt', async () => {
+  const hub = createHub({ port: 0, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'recon-away-')), seed: 'empty', demo: false, log: () => {} });
+  await hub.listen();
+  const base = `http://127.0.0.1:${hub.port}`;
+  const json = { 'content-type': 'application/json' };
+  const inB = { ...json, 'x-recon-agent': 'roamer', 'x-recon-hunt': 'hunt-b' };
+  // the agent once worked in the hunt on screen, now works in hunt-b
+  await fetch(`${base}/api/heartbeat`, { method: 'POST', headers: { ...json, 'x-recon-agent': 'roamer' }, body: '{}' });
+  await fetch(`${base}/api/start`, { method: 'POST', headers: { ...json, 'x-recon-agent': 'roamer' }, body: JSON.stringify({ name: 'hunt-b' }) });
+  const onScreen = (await (await fetch(`${base}/api/engagements`)).json()).current;
+  assert.notEqual((await (await fetch(`${base}/api/state`)).json()).project.name, 'hunt-b', 'hunt-b runs in the background');
+  void onScreen;
+  // the human steers it from the hunt on screen
+  const waiting = fetch(`${base}/api/wait?timeout=20`, { headers: inB }).then((r) => r.json());
+  await new Promise((r) => setTimeout(r, 300));
+  const st = await (await fetch(`${base}/api/items/steer`, { method: 'POST', headers: json, body: JSON.stringify({ action: 'note', to: ['ag_roamer'], note: 'check the oracle' }) })).json();
+  const woke = await waiting;
+  assert.equal(woke.woke, true);
+  assert.equal(woke.events[0].id, st.id);
+  assert.ok(woke.events[0].hunt, 'says which hunt it is in');
+  const p = await (await fetch(`${base}/api/pulse`, { headers: inB })).json();
+  assert.match(p.pulse, /in the hunt .*check the oracle/);
+  const b = await (await fetch(`${base}/api/briefing`, { headers: inB })).json();
+  assert.equal(b.mustDo.find((x) => x.kind === 'steer-elsewhere').id, st.id);
+  await hub.close();
+});

@@ -39,6 +39,32 @@ class HttpError extends Error {
 
 // ---------- tenants ----------
 
+// Steers for this agent waiting in other open hunts: the human may be looking at
+// one hunt while the agent works in another. A steer to "all" counts when the agent
+// has been in that hunt.
+function steersElsewhere(t, here, agentId) {
+  if (!t.engagements?.loaded) return [];
+  const out = [];
+  for (const { name, store } of t.engagements.loaded()) {
+    if (store === here) continue;
+    const known = Boolean(store.get('agent', agentId));
+    for (const s of Object.values(store.state.items.steer)) {
+      if (s.state === 'addressed') continue;
+      const to = s.to || [];
+      if (to.includes(agentId) || (to.includes('all') && known && s.state === 'open')) out.push({ hunt: name, id: s.id, state: s.state, note: s.note, action: s.action, at: s.createdAt });
+    }
+  }
+  return out;
+}
+
+function elsewhereTodo(list) {
+  return list.map((s) => ({
+    kind: 'steer-elsewhere', id: s.id, urgent: true,
+    do: `the human wrote to you in the hunt "${s.hunt}" (steer ${s.id}): ${String(s.note || s.action).slice(0, 100)}`,
+    how: `switch to it with recon_start_engagement "${s.hunt}" (cli: --hunt "${s.hunt}") and answer there`,
+  }));
+}
+
 // What should wake a waiting agent: steers to it that it has not acknowledged,
 // and its proposals the human decided since it last woke.
 function wakeEvents(state, agentId, since) {
@@ -318,7 +344,7 @@ export function createHub(overrides = {}) {
   route('GET', '/api/briefing', ({ t, who, query }) => {
     const id = who !== 'human' ? who : query.get('agent') ? agentIdFor(query.get('agent')) : null;
     if (!id) throw new HttpError(400, 'send X-Recon-Agent: <name> (or ?agent=<name>) to get a briefing');
-    const todo = mustDo(t.store.state, id);
+    const todo = [...mustDo(t.store.state, id), ...elsewhereTodo(steersElsewhere(t, t.store, id))];
     const b = briefing(t.store.state, id);
     const left = whereWeLeftOff(t.store.state, id);
     return {
@@ -432,16 +458,19 @@ export function createHub(overrides = {}) {
     const now = Date.now();
     if (agent.lastWokeAt === undefined) agent.lastWokeAt = now;
     const since = agent.lastWokeAt;
-    let events = wakeEvents(store.state, who, since);
+    const awayEvents = () => steersElsewhere(t, store, who).filter((s) => s.state === 'open').map((s) => ({ type: 'steer', hunt: s.hunt, id: s.id, action: s.action, note: s.note, at: s.at }));
+    let events = [...wakeEvents(store.state, who, since), ...awayEvents()];
     if (!events.length) {
       if (!agent.waitingSince) { agent.waitingSince = now; agent.updatedAt = store.tick(); store.emitChange('upsert', 'agent', agent, null); }
       const ms = Math.min(Math.max(Number(query.get('timeout')) || 25, 1), 55) * 1000;
       events = await new Promise((resolve) => {
-        const onChange = () => { const e = wakeEvents(store.state, who, since); if (e.length) done(e); };
+        const others = (t.engagements?.loaded?.() || []).map((x) => x.store).filter((s) => s !== store);
+        const onChange = () => { const e = [...wakeEvents(store.state, who, since), ...awayEvents()]; if (e.length) done(e); };
         const onClose = () => done([]);
         const timer = setTimeout(() => done([]), ms);
-        function done(e) { clearTimeout(timer); store.off('change', onChange); res.off('close', onClose); resolve(e); }
+        function done(e) { clearTimeout(timer); store.off('change', onChange); for (const o of others) o.off('change', onChange); res.off('close', onClose); resolve(e); }
         store.on('change', onChange);
+        for (const o of others) o.on('change', onChange);
         res.on('close', onClose);
       });
     }
@@ -452,7 +481,9 @@ export function createHub(overrides = {}) {
     return {
       woke: true,
       events,
-      next: events.some((e) => e.type === 'steer')
+      next: events.some((e) => e.hunt)
+        ? `The human wrote to you in another hunt ("${events.find((e) => e.hunt).hunt}"). Switch to it with recon_start_engagement, acknowledge the steer there, do what it asks and report back.`
+        : events.some((e) => e.type === 'steer')
         ? 'The human wrote to you. Acknowledge each steer now (recon_steer state=acknowledged), do what it asks, report back (recon_steer state=addressed response="..."), then call recon_wait again.'
         : 'The human decided. Act on the choice, tell them what you did with recon_say, then call recon_wait again when you are done.',
     };
@@ -460,7 +491,13 @@ export function createHub(overrides = {}) {
 
   route('GET', '/api/pulse', ({ t, who }) => {
     if (who === 'human') return { pulse: null, mustDo: [] };
-    return { pulse: pulse(t.store.state, who), mustDo: mustDo(t.store.state, who) };
+    const away = elsewhereTodo(steersElsewhere(t, t.store, who));
+    const here = pulse(t.store.state, who);
+    const extra = away.map((x) => `- ${x.do} (${x.how})`).join('\n');
+    return {
+      pulse: here || extra ? [here, extra && `recon: ${away.length} steer(s) for you in another hunt:\n${extra}`].filter(Boolean).join('\n') : null,
+      mustDo: [...mustDo(t.store.state, who), ...away],
+    };
   });
 
   // Re-run every gate against a finding and say what stands between it and a valid report.
@@ -663,7 +700,7 @@ export function createHub(overrides = {}) {
     const result = await match.handler({ req, res, url, params, query: url.searchParams, body, auth, t, who });
     const extra = {};
     if (t && who !== 'human') {
-      const todo = mustDo(t.store.state, who).filter((x) => x.urgent);
+      const todo = [...mustDo(t.store.state, who), ...elsewhereTodo(steersElsewhere(t, t.store, who))].filter((x) => x.urgent);
       if (todo.length) extra['x-recon-pulse'] = `${todo.length} urgent: ${todo[0].do}`.replace(/[^\x20-\x7e]/g, '').slice(0, 300);
     }
     sendJson(res, 200, result, extra);

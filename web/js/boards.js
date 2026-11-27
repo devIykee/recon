@@ -9,7 +9,7 @@ import {
 import { createDetail } from './detail.js';
 import { avatar, authorAvatar, openSteerComposer, recipientPicker } from './steer.js';
 import { bus, loadPlaybook } from './bus.js';
-import { createArchitecture } from './architecture.js';
+import { createSystemMap } from './sysmap.js';
 
 export function createBoards(root) {
   let current = null;
@@ -19,7 +19,7 @@ export function createBoards(root) {
   const openPlaybooks = new Set();
   let inner = null;
   let lastView = null;
-  const arch = createArchitecture();
+  const arch = createSystemMap();
 
   function mount(view) {
     if (lastView !== view) {
@@ -474,10 +474,7 @@ export function createBoards(root) {
     open(id) {
       const it = byId(id);
       if (current === 'architecture' && it && (it.kind === 'component' || it.kind === 'relation' || it.kind === 'assumption')) {
-        arch.pick(it.targetId, id);
-        render();
-        requestAnimationFrame(() => root.querySelector(`[data-target="${it.targetId}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
-        return;
+        if (it.kind === 'component') { arch.pick(it.targetId, id); return; }
       }
       openId = id;
       render();

@@ -76,9 +76,34 @@ test('open steers come first: gated writes, mustDo and pulse', () => {
   assert.match(pulse(s.state, a), /is the minter really inert/);
   s.patch('steer', st.id, { state: 'acknowledged' }, a);
   s.patch('component', c.id, { reviewState: 'scanning' }, a);
-  assert.equal(pulse(s.state, a), null, 'no urgent items left');
+  assert.match(pulse(s.state, a), /work this now: steer .*minter/, 'an acknowledged steer stays in front of the agent');
   assert.ok(mustDo(s.state, a).some((x) => x.kind === 'address'));
   assert.ok(beforeYouStop(s.state, a).some((x) => /record everything still worth doing as a lead/.test(x)));
+  s.patch('steer', st.id, { state: 'addressed', response: 'inert: nothing calls mint' }, a);
+  assert.equal(pulse(s.state, a), null, 'quiet once it reports back');
+});
+
+test('a steer cannot be acknowledged and then ignored', () => {
+  const { s, a, t, c } = board();
+  const other = s.create('component', { targetId: t.id, name: 'Other.fn()' }, 'human');
+  const st = s.create('steer', { action: 'cover', itemId: c.id, itemKind: 'component', note: 'look here first', to: [a] }, 'human');
+  s.patch('steer', st.id, { state: 'acknowledged' }, a);
+  // a few unrelated writes are fine
+  for (let i = 0; i < 5; i++) s.create('assumption', { text: `side note ${i}`, targetId: t.id }, a);
+  // then other work is refused until the agent answers
+  assert.throws(() => s.create('assumption', { text: 'one more', targetId: t.id }, a), /acknowledged steer .* have not reported back.*look here first/s);
+  assert.throws(() => s.patch('component', other.id, { reviewState: 'scanning' }, a), /have not reported back/);
+  // work on the steered item, messages and leads still go through
+  s.patch('component', c.id, { reviewState: 'scanning' }, a);
+  s.create('lead', { text: 'later: Other.fn()', targetId: t.id }, a);
+  // progress on the steer reopens the window
+  s.create('message', { text: 'half way: deposit path is fine', replyTo: st.id }, a);
+  s.create('assumption', { text: 'allowed again', targetId: t.id }, a);
+  // and time alone also counts
+  const later = Date.now() + 11 * 60_000;
+  assert.ok(mustDo(s.state, a, later).some((x) => x.kind === 'address' && /OVERDUE/.test(x.do)));
+  s.patch('steer', st.id, { state: 'addressed', response: 'checked: fine' }, a);
+  for (let i = 0; i < 8; i++) s.create('assumption', { text: `free ${i}`, targetId: t.id }, a);
 });
 
 test('a ready finding without a report decision asks the human how to report', () => {

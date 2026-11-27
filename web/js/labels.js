@@ -3,7 +3,7 @@
 
 export const VIEWS = [
   { id: 'map', label: 'Map', icon: 'map', key: '1', tip: 'The whole engagement at a glance' },
-  { id: 'architecture', label: 'Architecture', icon: 'graph', key: '2', tip: 'How the system fits together, and what its developers assume' },
+  { id: 'architecture', label: 'System map', icon: 'graph', key: '2', tip: 'How every part connects: who calls what, who moves tokens, who trusts whom' },
   { id: 'coverage', label: 'Coverage', icon: 'coverage', key: '3', tip: 'Attack surface: what has been looked at', term: 'coverage' },
   { id: 'assumptions', label: 'Assumptions', icon: 'sticky', key: '4', tip: 'What is being taken for granted', term: 'assumption' },
   { id: 'hypotheses', label: 'Hypotheses', icon: 'flask', key: '5', tip: 'Suspected bugs being tested', term: 'hypothesis' },

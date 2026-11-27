@@ -7,6 +7,7 @@
 // stdout carries the protocol; every log line goes to stderr.
 
 import readline from 'node:readline';
+import { fileURLToPath } from 'node:url';
 import { createClient, defaultUrl, ReconError } from './client.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -468,8 +469,9 @@ const INSTRUCTIONS = `recon: a shared board where you and a human research vulne
 3. Work each target in order: map it (recon_scan, then recon_map for what the scan cannot see), record the developers' assumptions, then hunt.
 4. Every claim needs evidence. Findings need a complete confirmation card and earned severity.
 5. Never leave loose ends in chat: record open threads with recon_add_lead and choices with recon_propose options.
-6. Never just stop: when you are done, blocked or waiting, call recon_wait. The human talks to you from the board and it wakes you; answer with recon_steer or recon_say.
-7. The human keeps skills (recon_skill): follow the ones that fit. Reports are written with recon_write_report, which hands you their report skill as your instructions.
+6. This one recon MCP server serves every project and hunt. Never add another MCP server for a hunt; to work on another project, call recon_start_engagement with its name.
+7. Never just stop: when you are done, blocked or waiting, call recon_wait. The human talks to you from the board and it wakes you; answer with recon_steer or recon_say.
+8. The human keeps skills (recon_skill): follow the ones that fit. Reports are written with recon_write_report, which hands you their report skill as your instructions.
 Never set verification or priority; those belong to the human.`;
 
 function compact(it) {
@@ -557,7 +559,7 @@ export async function dispatch(msg, { getClient, onInitialize, ctx = {} } = {}) 
   }
 }
 
-export async function runMcp({ name = process.env.RECON_AGENT || 'agent', url, key, model, hunt = null, input = process.stdin, output = process.stdout, log = (...a) => console.error(...a), embed = true } = {}) {
+export async function runMcp({ name = process.env.RECON_AGENT || 'agent', url, key, model, hunt = null, huntPinned = false, input = process.stdin, output = process.stdout, log = (...a) => console.error(...a), embed = true } = {}) {
   const hubUrl = (url || defaultUrl()).replace(/\/$/, '');
   let client = createClient({ url: hubUrl, key, agent: name, transport: 'mcp', model });
   let huntName = hunt;
@@ -600,6 +602,25 @@ export async function runMcp({ name = process.env.RECON_AGENT || 'agent', url, k
 
   const send = (msg) => output.write(`${JSON.stringify(msg)}\n`);
 
+  // One recon entry serves every project. Clients that start MCP servers outside
+  // the project (a fixed folder, the home directory) still say which workspace
+  // they are in through MCP roots: follow it, unless --hunt pinned the hunt.
+  let rootsAsk = 0;
+  let clientRoots = false;
+  const askRoots = () => { if (clientRoots && !huntPinned) send({ jsonrpc: '2.0', id: `recon-roots-${++rootsAsk}`, method: 'roots/list' }); };
+  async function onRoots(result) {
+    const uri = (result?.roots || []).map((r) => r.uri).find((u) => /^file:/.test(u || ''));
+    if (!uri) return;
+    let dir;
+    try { dir = fileURLToPath(uri); } catch { return; }
+    const { projectName } = await import('./project.js');
+    const fromRoot = projectName(dir);
+    if (!fromRoot || fromRoot === huntName) return;
+    huntName = fromRoot;
+    await hubReady;
+    await enterHunt();
+  }
+
   async function handle(msg) {
     const res = await dispatch(msg, {
       ctx: {
@@ -617,7 +638,13 @@ export async function runMcp({ name = process.env.RECON_AGENT || 'agent', url, k
     if (!line.trim()) return;
     let msg;
     try { msg = JSON.parse(line); } catch { send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }); return; }
-    for (const m of Array.isArray(msg) ? msg : [msg]) handle(m);
+    for (const m of Array.isArray(msg) ? msg : [msg]) {
+      // replies to our own requests (roots/list)
+      if (!m.method && typeof m.id === 'string' && m.id.startsWith('recon-roots-')) { onRoots(m.result).catch((e) => log(`recon mcp: ${e.message}`)); continue; }
+      if (m.method === 'initialize') clientRoots = Boolean(m.params?.capabilities?.roots);
+      if (m.method === 'notifications/initialized' || m.method === 'notifications/roots/list_changed') askRoots();
+      handle(m);
+    }
   });
 
   return new Promise((resolve) => {
