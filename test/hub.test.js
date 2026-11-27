@@ -177,3 +177,50 @@ test('two agents on two projects at once: each writes to its own hunt, the board
   assert.deepEqual(h.tenant().store.list('target').map((t) => t.name), ['Bridge'], 'opening it shows the agent\'s work');
   await h.close();
 });
+
+test('wait: an idle agent wakes when the human writes to it from the board', async () => {
+  const hub = createHub({ port: 0, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'recon-wait-')), seed: 'empty', demo: false, log: () => {} });
+  await hub.listen();
+  const base = `http://127.0.0.1:${hub.port}`;
+  const agent = { 'x-recon-agent': 'listener', 'content-type': 'application/json' };
+  const s = hub.tenant().store;
+
+  // nothing to say: it times out quietly and the board shows it as listening meanwhile
+  const quiet = fetch(`${base}/api/wait?timeout=1`, { headers: agent }).then((r) => r.json());
+  await new Promise((r) => setTimeout(r, 200));
+  assert.ok(s.get('agent', 'ag_listener').waitingSince, 'listening while it waits');
+  assert.deepEqual((await quiet).woke, false);
+
+  const started = Date.now();
+  const pending = fetch(`${base}/api/wait?timeout=20`, { headers: agent }).then((r) => r.json());
+  await new Promise((r) => setTimeout(r, 300));
+  await fetch(`${base}/api/items/steer`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'note', to: ['ag_listener'], note: 'look at the oracle next' }) });
+  const woke = await pending;
+  assert.equal(woke.woke, true);
+  assert.ok(Date.now() - started < 5000, 'woke at once, not at the timeout');
+  assert.equal(woke.events[0].type, 'steer');
+  assert.equal(woke.events[0].note, 'look at the oracle next');
+  assert.match(woke.next, /Acknowledge/);
+  assert.ok(!s.get('agent', 'ag_listener').waitingSince, 'no longer listening once woken');
+
+  // an open steer wakes it immediately; acknowledging it stops that
+  const again = await (await fetch(`${base}/api/wait?timeout=1`, { headers: agent })).json();
+  assert.equal(again.woke, true);
+  await fetch(`${base}/api/steers/${woke.events[0].id}/ack`, { method: 'POST', headers: agent, body: '{}' });
+
+  // a decided proposal wakes it too, once
+  const p = await (await fetch(`${base}/api/items/proposal`, { method: 'POST', headers: agent, body: JSON.stringify({ text: 'Write the report now?', options: ['yes', 'hunt more'] }) })).json();
+  const waitDecision = fetch(`${base}/api/wait?timeout=20`, { headers: agent }).then((r) => r.json());
+  await new Promise((r) => setTimeout(r, 200));
+  await fetch(`${base}/api/proposals/${p.id}/accept`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ choice: 'hunt more' }) });
+  const d = await waitDecision;
+  assert.equal(d.events[0].type, 'decision');
+  assert.equal(d.events[0].choice, 'hunt more');
+  assert.equal((await (await fetch(`${base}/api/wait?timeout=1`, { headers: agent })).json()).woke, false, 'the same decision does not wake it twice');
+
+  // the agent answers on the board
+  const said = await (await fetch(`${base}/api/items/message`, { method: 'POST', headers: agent, body: JSON.stringify({ text: 'On it: oracle next.' }) })).json();
+  assert.equal(said.kind, 'message');
+  assert.deepEqual(said.to, ['human']);
+  await hub.close();
+});

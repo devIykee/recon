@@ -58,7 +58,7 @@ export const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        kind: { type: 'string', enum: ['target', 'component', 'relation', 'assumption', 'hypothesis', 'finding', 'chain', 'lead', 'steer', 'proposal', 'agent'] },
+        kind: { type: 'string', enum: ['target', 'component', 'relation', 'assumption', 'hypothesis', 'finding', 'chain', 'lead', 'steer', 'proposal', 'agent', 'message'] },
         filter: { type: 'object', description: 'field -> value, exact match', additionalProperties: { type: 'string' } },
       },
       required: ['kind'],
@@ -416,6 +416,30 @@ export const TOOLS = [
     run: async (c, a) => (a.name ? c.skill(a.name) : (await c.skills()).skills.map(({ id, name, description, use }) => ({ id, name, description, use }))),
   },
   {
+    name: 'recon_say',
+    description: 'Tell the human something on the board: an update, an answer, a question, what you just did. It appears in their Talk panel at once. Use it instead of writing to your terminal when the human is watching the board. For a decision, use recon_propose with options instead.',
+    inputSchema: { type: 'object', properties: { text: str('What you want to say, in plain words'), item: str('Optional item id or name it is about'), replyTo: str('Optional steer id you are answering') }, required: ['text'] },
+    run: async (c, a) => {
+      const itemId = a.item ? (await c.resolve(a.item).catch(() => null))?.item?.id || '' : '';
+      return compact(await c.say(a.text, { itemId, replyTo: a.replyTo || '' }));
+    },
+  },
+  {
+    name: 'recon_wait',
+    description: 'Call this instead of ending your turn when you are done, blocked, or waiting on the human. It returns the moment the human writes to you from the board or decides one of your proposals, with what they said; then act on it, reply (recon_steer / recon_say) and call recon_wait again. While you wait the board shows you as listening. Returns { woke: false } after `seconds` with nothing new: call it again to keep listening. If your client cuts tool calls off after a minute (Codex), pass seconds: 50.',
+    inputSchema: { type: 'object', properties: { seconds: { type: 'number', description: 'How long to wait at most (default 300, max 3600)' } } },
+    run: async (c, a) => {
+      const until = Date.now() + Math.min(Math.max(Number(a.seconds) || 300, 5), 3600) * 1000;
+      for (;;) {
+        const left = Math.ceil((until - Date.now()) / 1000);
+        if (left <= 0) break;
+        const r = await c.wait(Math.min(25, left));
+        if (r.woke) return r;
+      }
+      return { woke: false, next: 'Nothing from the human yet. Call recon_wait again to keep listening.' };
+    },
+  },
+  {
     name: 'recon_playbook',
     description: 'The playbook for a protocol type: what usually goes wrong, plain explanations, and concrete checks with ids.',
     inputSchema: { type: 'object', properties: { protocolType: en('protocolType', 'Protocol type') }, required: ['protocolType'] },
@@ -429,7 +453,8 @@ const INSTRUCTIONS = `recon: a shared board where you and a human research vulne
 3. Work each target in order: map it (recon_scan, then recon_map for what the scan cannot see), record the developers' assumptions, then hunt.
 4. Every claim needs evidence. Findings need a complete confirmation card and earned severity.
 5. Never leave loose ends in chat: record open threads with recon_add_lead and choices with recon_propose options.
-6. The human keeps skills (recon_skill): follow the ones that fit. Reports are written with recon_write_report, which hands you their report skill as your instructions.
+6. Never just stop: when you are done, blocked or waiting, call recon_wait. The human talks to you from the board and it wakes you; answer with recon_steer or recon_say.
+7. The human keeps skills (recon_skill): follow the ones that fit. Reports are written with recon_write_report, which hands you their report skill as your instructions.
 Never set verification or priority; those belong to the human.`;
 
 function compact(it) {

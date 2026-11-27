@@ -111,6 +111,7 @@ export function beforeYouStop(state, agentId) {
   list.push('record everything still worth doing as a lead (recon_add_lead: what, why it matters, what blocks it, next step) so nothing is lost when you stop');
   if (leads.length) list.push(`${leads.length} open lead(s): keep them current (done, dropped, or blocked with the reason)`);
   list.push('end with a recon_propose that offers the human a choice of next moves, instead of a question in chat');
+  list.push('then do not end your turn: call recon_wait, which returns as soon as the human answers from the board');
   return list;
 }
 

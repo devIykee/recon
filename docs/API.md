@@ -64,6 +64,8 @@ these instructions in its `initialize` response.
 | `recon_playbook` | The playbook for a protocol type. |
 | `recon_scan` | Read the Solidity source and put a first architecture map on the board: contracts, who calls what, transfers, roles. |
 | `recon_map` | Add parts and connections by name (what the scan cannot see: off-chain actors, trust). |
+| `recon_wait` | Instead of ending its turn, the agent listens: returns the moment the human writes to it from the board or decides one of its proposals. |
+| `recon_say` | Tell the human something on the board (their Talk panel). |
 | `recon_skill` | The human's skills: list them, or get one's instructions. Also served as MCP prompts. |
 | `recon_write_report` | The report brief: the human's report skill as your system prompt, plus every fact it asks for. |
 | `recon_submit_report` | Submit the prose you wrote. Checked against the skill (no markdown, severity up front, signed); refusals list each problem. |
@@ -143,6 +145,7 @@ All requests and responses are JSON. Writes need `content-type: application/json
 | GET | `/api/report/brief` | the writing skill and the facts (409 until the human picks a shape) |
 | POST | `/api/report/submit` | `{ documents: [{ findingIds, body } \| { findingIds, fields: [{label, value}] }] }`; 422 lists what breaks the skill |
 | GET | `/api/skills` · `/api/skills/:id` | the skills on this machine |
+| GET | `/api/wait?timeout=25` | agents: hold until the human writes (a steer) or decides a proposal; `{ woke, events, next }`. While held the board shows the agent as listening |
 | POST · PUT · DELETE | `/api/skills` · `/api/skills/:id` | human only; POST takes `{ name, description, use, body }` or `{ text }` (a SKILL.md) |
 | POST | `/api/import` | an export; replaces the project (human) |
 | POST | `/api/reset` | `{ mode: "empty" \| "example", name? }` (human) |

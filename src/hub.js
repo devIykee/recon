@@ -17,7 +17,7 @@ import { healthAll } from './health.js';
 import { DemoAgent } from './demo.js';
 import { Engagements } from './engagements.js';
 import { mustDo, pulse, beforeYouStop, whereWeLeftOff } from './proactive.js';
-import { cardGaps, severityProblem, evidenceGaps, duplicateOf, reportedMatch } from './quality.js';
+import { cardGaps, severityProblem, evidenceGaps, duplicateOf, reportedMatch, openSteersFor } from './quality.js';
 import { buildReport, reportBrief, checkSubmission } from './report.js';
 import { Skills, SkillError } from './skills.js';
 import { playbookFor } from './knowledge.js';
@@ -38,6 +38,27 @@ class HttpError extends Error {
 }
 
 // ---------- tenants ----------
+
+// What should wake a waiting agent: steers to it that it has not acknowledged,
+// and its proposals the human decided since it last woke.
+function wakeEvents(state, agentId, since) {
+  const steers = openSteersFor(state, agentId).map((s) => {
+    const item = s.itemId ? Object.values(state.items).map((m) => m[s.itemId]).find(Boolean) : null;
+    return { type: 'steer', id: s.id, action: s.action, note: s.note, item: item ? { id: item.id, kind: item.kind, title: label(item) } : null, at: s.createdAt };
+  });
+  const decided = Object.values(state.items.proposal)
+    .filter((p) => p.createdBy === agentId && p.state !== 'pending' && p.updatedAt > since)
+    .map((p) => ({ type: 'decision', id: p.id, text: p.text, state: p.state, choice: p.choice || '', at: p.updatedAt }));
+  return [...steers, ...decided];
+}
+
+function stopListening(store, agentId) {
+  const agent = store.get('agent', agentId);
+  if (!agent?.waitingSince) return;
+  delete agent.waitingSince;
+  agent.updatedAt = store.tick();
+  store.emitChange('upsert', 'agent', agent, null);
+}
 
 class Tenant {
   constructor(id, cfg) {
@@ -381,6 +402,42 @@ export function createHub(overrides = {}) {
     return playbookFor(target);
   });
 
+  // An agent with nothing left to do waits here instead of ending its turn. It
+  // returns the moment the human writes to it from the board (a steer) or decides
+  // one of its proposals, so the human never has to type into the agent's terminal.
+  route('GET', '/api/wait', async ({ t, who, query, res }) => {
+    if (who === 'human') throw new HttpError(400, 'wait is for agents; send X-Recon-Agent');
+    const store = t.store;
+    const agent = store.get('agent', who);
+    const now = Date.now();
+    if (agent.lastWokeAt === undefined) agent.lastWokeAt = now;
+    const since = agent.lastWokeAt;
+    let events = wakeEvents(store.state, who, since);
+    if (!events.length) {
+      if (!agent.waitingSince) { agent.waitingSince = now; agent.updatedAt = store.tick(); store.emitChange('upsert', 'agent', agent, null); }
+      const ms = Math.min(Math.max(Number(query.get('timeout')) || 25, 1), 55) * 1000;
+      events = await new Promise((resolve) => {
+        const onChange = () => { const e = wakeEvents(store.state, who, since); if (e.length) done(e); };
+        const onClose = () => done([]);
+        const timer = setTimeout(() => done([]), ms);
+        function done(e) { clearTimeout(timer); store.off('change', onChange); res.off('close', onClose); resolve(e); }
+        store.on('change', onChange);
+        res.on('close', onClose);
+      });
+    }
+    store.touchAgent(agent.name, {});
+    if (!events.length) return { woke: false, waitedSince: agent.waitingSince };
+    agent.lastWokeAt = Date.now();
+    stopListening(store, who);
+    return {
+      woke: true,
+      events,
+      next: events.some((e) => e.type === 'steer')
+        ? 'The human wrote to you. Acknowledge each steer now (recon_steer state=acknowledged), do what it asks, report back (recon_steer state=addressed response="..."), then call recon_wait again.'
+        : 'The human decided. Act on the choice, tell them what you did with recon_say, then call recon_wait again when you are done.',
+    };
+  });
+
   route('GET', '/api/pulse', ({ t, who }) => {
     if (who === 'human') return { pulse: null, mustDo: [] };
     return { pulse: pulse(t.store.state, who), mustDo: mustDo(t.store.state, who) };
@@ -582,7 +639,8 @@ export function createHub(overrides = {}) {
       }
     }
     const who = t ? actor(req, auth, t) : 'human';
-    const result = await match.handler({ req, url, params, query: url.searchParams, body, auth, t, who });
+    if (t && who !== 'human' && url.pathname !== '/api/wait') stopListening(t.store, who);
+    const result = await match.handler({ req, res, url, params, query: url.searchParams, body, auth, t, who });
     const extra = {};
     if (t && who !== 'human') {
       const todo = mustDo(t.store.state, who).filter((x) => x.urgent);

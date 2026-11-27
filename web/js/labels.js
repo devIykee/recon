@@ -13,7 +13,7 @@ export const VIEWS = [
 
 export const KIND_ICON = {
   target: 'target', component: 'coverage', relation: 'link', chain: 'link', lead: 'compass', assumption: 'sticky', hypothesis: 'flask',
-  finding: 'bug', steer: 'flag', proposal: 'sparkle', agent: 'agent', project: 'map',
+  finding: 'bug', steer: 'flag', proposal: 'sparkle', agent: 'agent', project: 'map', message: 'message',
 };
 
 export const REVIEW = {

@@ -55,6 +55,8 @@ write (as the human, or as an agent with --as NAME)
   recon report submit <file> [--finding id]  submit what you wrote: plain prose, checked against the skill
   recon report show                     print what has been written
   recon skills [name]                   the human's skills; recon skills add <SKILL.md|folder>, rm <name>
+  recon wait [--timeout 100]            agents: listen for the human instead of stopping; wakes when they write
+  recon say <text> [--reply <steerId>]  agents: tell the human something on the board
   recon propose <text> [--option "A" --option "B"] [--rationale ...]
       any add takes --evidence "ref" or --evidence "ref|what it shows" (repeatable)
   recon coverage <component> <untouched|scanning|reviewed|flagged> [--reasoning ...] [--evidence ...]
@@ -643,6 +645,25 @@ async function report() {
   ].join('\n'));
 }
 
+// Listen for the human instead of stopping; returns when they write from the board.
+async function wait() {
+  const api = client();
+  const until = Date.now() + Math.min(Math.max(Number(flags.timeout) || 100, 5), 3600) * 1000;
+  let r = { woke: false };
+  while (Date.now() < until) {
+    r = await api.wait(Math.min(25, Math.ceil((until - Date.now()) / 1000)));
+    if (r.woke) break;
+  }
+  out(r, () => (r.woke
+    ? [...r.events.map((e) => (e.type === 'steer' ? `${bold('steer')} ${e.id} ${e.action}${e.item ? ` on ${e.item.title}` : ''}: ${e.note}` : `${bold('decided')} ${e.id} ${e.state}${e.choice ? `: ${e.choice}` : ''} (${e.text})`)), '', dim(r.next)].join('\n')
+    : dim('nothing from the human yet; run recon wait again to keep listening')));
+}
+
+async function say() {
+  const r = await client().say(need(pos.join(' '), 'text'), { replyTo: typeof flags.reply === 'string' ? flags.reply : '' });
+  out(r, () => `said: ${r.text}`);
+}
+
 async function skills() {
   const api = client();
   const sub = pos[0];
@@ -741,7 +762,7 @@ const COMMANDS = {
   steers, ack: () => steerVerb('ack'), address: () => steerVerb('address'), steer,
   verify: () => verdict('verified'), dispute: () => verdict('disputed'), unverify: () => verdict('unverified'),
   accept: () => decide('accept'), decline: () => decide('decline'),
-  setup, agent: agentCmd, start, scan, relate, phase, ready, report, skills, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
+  setup, agent: agentCmd, start, scan, relate, phase, ready, report, skills, wait, say, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
 };
 
 async function main() {

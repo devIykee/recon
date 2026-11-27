@@ -97,6 +97,13 @@ the way.
 
 ![The swarm board](docs/img/swarm.jpg)
 
+**Talk to agents from the board.** The Talk panel is a conversation with each
+agent, or all of them. What you write reaches the agent with its next step, and
+an agent that has finished or is blocked does not just stop: it calls
+`recon_wait` (or `recon wait`) and listens, shown as *listening* on the board,
+and wakes the moment you write. It answers in the same panel. You never have
+to switch to its terminal.
+
 **Your skills, and reports written your way.** Keep reusable instructions for
 your agents under Skills (K): how you audit a kind of protocol, house rules,
 and how you want disclosures written. They are stored once per machine as

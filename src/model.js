@@ -43,7 +43,7 @@ export const ENUMS = Object.freeze({
 });
 
 export const KINDS = Object.freeze([
-  'agent', 'target', 'component', 'relation', 'assumption', 'hypothesis', 'finding', 'chain', 'steer', 'proposal', 'lead',
+  'agent', 'target', 'component', 'relation', 'assumption', 'hypothesis', 'finding', 'chain', 'steer', 'proposal', 'lead', 'message',
 ]);
 
 // Component types that describe the system but are not attack surface to review.
@@ -202,6 +202,14 @@ export const SCHEMA = {
     choice: str(),
     state: en('proposalState', A, 'pending'),
   },
+  // What an agent says to the human: a reply, an update, a question. Humans talk
+  // to agents with steers, which agents must acknowledge.
+  message: {
+    text: str(A, { required: true }),
+    to: { type: 'array', owner: A, default: ['human'] },
+    itemId: str(),
+    replyTo: str(),
+  },
   // An open thread: work worth doing that is not done yet, so nothing is forgotten.
   lead: {
     text: str(A, { required: true }),
@@ -220,7 +228,7 @@ export const SCHEMA = {
 // The field that names an item in the ui and in activity summaries.
 export const TITLE_FIELD = {
   agent: 'name', target: 'name', component: 'name', relation: 'label', assumption: 'text',
-  hypothesis: 'text', finding: 'title', chain: 'title', steer: 'note', proposal: 'text', lead: 'text',
+  hypothesis: 'text', finding: 'title', chain: 'title', steer: 'note', proposal: 'text', lead: 'text', message: 'text',
 };
 
 // Fields whose change reads as "moved" in the activity feed.
@@ -362,7 +370,7 @@ export function slug(text) {
 
 const PREFIX = {
   agent: 'ag', target: 'tg', component: 'cp', relation: 'rl', assumption: 'as', hypothesis: 'hy',
-  finding: 'fd', chain: 'ch', steer: 'st', proposal: 'pr', lead: 'ld',
+  finding: 'fd', chain: 'ch', steer: 'st', proposal: 'pr', lead: 'ld', message: 'ms',
 };
 
 let idSeq = 0;

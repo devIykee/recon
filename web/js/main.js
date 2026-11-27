@@ -135,8 +135,10 @@ function renderLive() {
   el.classList.toggle('on', live.connected);
   el.classList.toggle('off', !live.connected);
   if (!live.connected) { setChildren(text, 'reconnecting…'); return; }
-  const writing = list('agent').filter((a) => agentIsWriting(a.id, 5000));
+  const listening = list('agent').filter((a) => a.waitingSince);
+  const writing = list('agent').filter((a) => !a.waitingSince && agentIsWriting(a.id, 5000));
   if (writing.length) setChildren(text, h('b', writing.map((a) => a.name).join(', ')), writing.length > 1 ? ' are working' : ' is working');
+  else if (listening.length) setChildren(text, h('b', listening.map((a) => a.name).join(', ')), listening.length > 1 ? ' are listening' : ' is listening', ' · write in Talk');
   else {
     const last = live.state.activity[live.state.activity.length - 1];
     setChildren(text, 'live', last ? ` · last change ${short(last.at)}` : '');
@@ -342,6 +344,7 @@ function open(id) {
   if (item.kind === 'steer') { setSidebar(true); sidebar.select('steers'); return; }
   if (item.kind === 'proposal') { setSidebar(true); sidebar.select('next'); return; }
   if (item.kind === 'lead') { setSidebar(true); sidebar.select('threads'); return; }
+  if (item.kind === 'message') { setSidebar(true); sidebar.select('talk'); return; }
   if (view === 'map' && map.has(id)) { map.expand(id); return; }
   if (view === 'architecture' && ['component', 'relation', 'assumption'].includes(item.kind)) { boards.open(id); return; }
   const board = BOARD_FOR[item.kind];
@@ -423,6 +426,7 @@ function notify({ kind, item, prev, activity }) {
   }
   if (kind === 'proposal' && !prev) toast(`${authorName(activity.by)} proposes: ${truncateText(item.text, 80)} — open Next to answer`);
   if (kind === 'agent' && !prev) toast(`${item.name} connected over ${item.transport}`, 'ok');
+  if (kind === 'message' && !prev && sidebar.tab !== 'talk') toast(`${authorName(activity.by)}: ${truncateText(item.text, 90)} — open Talk to answer`);
 }
 
 // An agent is working in a hunt that is not on screen: offer to switch, at most once a minute per hunt.

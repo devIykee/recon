@@ -414,7 +414,7 @@ export class Store extends EventEmitter {
     const items = docItems(doc);
     const result = { created: 0, updated: 0, errors: [] };
     // targets first so component refs resolve; hypotheses before findings
-    const order = ['agent', 'target', 'component', 'relation', 'hypothesis', 'finding', 'chain', 'assumption', 'lead', 'steer', 'proposal'];
+    const order = ['agent', 'target', 'component', 'relation', 'hypothesis', 'finding', 'chain', 'assumption', 'lead', 'steer', 'proposal', 'message'];
     const deferred = [];
     const apply = (kind, raw) => {
       const { id, kind: _k, createdAt, updatedAt, createdBy, lastTouchedBy, _f, ...fields } = raw;

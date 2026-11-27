@@ -60,6 +60,7 @@ ownership rule below comes straight from `src/model.js`, so agents can rely on i
 | `color` | string |  | human or agent |
 | `avatar` | string |  | human or agent |
 | `transport` | string | `mcp` `cli` `api` `json` `demo` `ui` (default `api`) | human or agent |
+| `transports` | array |  | human or agent |
 | `status` | string | `active` `idle` `stuck` `offline` (default `active`) | human or agent |
 | `focus` | string |  | human or agent |
 | `focusItem` | string |  | human or agent |
@@ -72,10 +73,19 @@ ownership rule below comes straight from `src/model.js`, so agents can rely on i
 | --- | --- | --- | --- |
 | `name` *(required)* | string |  | human or agent |
 | `chain` | string |  | human or agent |
-| `protocolType` | string | `lending` `amm` `perps` `bridge` `staking` `nft-market` `governance` `oracle` `token` `vault` `other` (default `other`) | human or agent |
+| `protocolType` | string | `lending` `amm` `perps` `bridge` `staking` `nft-market` `governance` `oracle` `token` `vault` `factory` `dao-module` `nft-custody` `naming` `other` (default `other`) | human or agent |
 | `description` | string |  | human or agent |
 | `focus` | string |  | human or agent |
 | `scope` | string |  | human or agent |
+| `phase` | string | `mapping` `assumptions` `hunting` `reporting` (default `mapping`) | human or agent |
+| `inScope` | string |  | human or agent |
+| `outOfScope` | string |  | human or agent |
+| `alreadyReported` | array |  | human or agent |
+| `disclosureChannel` | string |  | human or agent |
+| `severityScale` | string |  | human or agent |
+| `bountyRules` | string |  | human or agent |
+| `playbooks` | array |  | human or agent |
+| `ignoredClasses` | array |  | human or agent |
 
 ### component
 
@@ -83,18 +93,31 @@ ownership rule below comes straight from `src/model.js`, so agents can rely on i
 | --- | --- | --- | --- |
 | `targetId` *(required)* | string |  | human or agent |
 | `name` *(required)* | string |  | human or agent |
-| `type` | string | `contract` `function` `module` `endpoint` `storage` `config` `other` (default `contract`) | human or agent |
+| `type` | string | `contract` `function` `module` `endpoint` `storage` `config` `actor` `external` `other` (default `contract`) | human or agent |
 | `reviewState` | string | `untouched` `scanning` `reviewed` `flagged` (default `untouched`) | human or agent |
+| `summary` | string |  | human or agent |
 | `location` | string |  | human or agent |
 | `owner` | string |  | human or agent |
 | `checklist` | object |  | human or agent |
 | `notes` | string |  | human or agent |
+
+### relation
+
+| field | type | values | who writes |
+| --- | --- | --- | --- |
+| `targetId` *(required)* | string |  | human or agent |
+| `from` *(required)* | string |  | human or agent |
+| `to` *(required)* | string |  | human or agent |
+| `type` | string | `calls` `delegates` `inherits` `reads` `writes` `transfers` `mints` `owns` `configures` `trusts` `other` (default `calls`) | human or agent |
+| `label` | string |  | human or agent |
 
 ### assumption
 
 | field | type | values | who writes |
 | --- | --- | --- | --- |
 | `text` *(required)* | string |  | human or agent |
+| `origin` | string | `developer` `agent` (default `agent`) | human or agent |
+| `category` | string | `trust` `invariant` `input` `external` `economic` `other` (default `other`) | human or agent |
 | `targetId` | string |  | human or agent |
 | `componentId` | string |  | human or agent |
 | `scope` | string |  | human or agent |
@@ -113,6 +136,9 @@ ownership rule below comes straight from `src/model.js`, so agents can rely on i
 | `status` | string | `testing` `confirmed` `dropped` (default `testing`) | human or agent |
 | `dropReason` | string |  | human or agent |
 | `findingId` | string |  | human or agent |
+| `exploitStage` | string | `capability` `trigger` `full` | human or agent |
+| `trigger` | string |  | human or agent |
+| `confirm` | object |  | human or agent |
 
 ### finding
 
@@ -129,6 +155,31 @@ ownership rule below comes straight from `src/model.js`, so agents can rely on i
 | `notes` | string |  | human or agent |
 | `repro` | string |  | human or agent |
 | `hypothesisId` | string |  | human or agent |
+| `attacker` | string | `stranger` `holder` `privileged` `admin` | human or agent |
+| `reachability` | string | `permissionless` `needs-role` `needs-config` `needs-social` | human or agent |
+| `bound` | string |  | human or agent |
+| `liveFunds` | string |  | human or agent |
+| `liveFundsMethod` | string | `eth_call` `fork` `explorer` `not-measured` | human or agent |
+| `alreadyReported` | string | `no` `yes` `unknown` | human or agent |
+| `alreadyReportedRef` | string |  | human or agent |
+| `verificationMethod` | string | `fork` `eth_call` `unit` `fuzz` `live-tx` `manual` | human or agent |
+| `testName` | string |  | human or agent |
+| `testResult` | string | `pass` `fail` `not-run` | human or agent |
+| `productionTouched` | boolean |  | human or agent |
+| `productionNote` | string |  | human or agent |
+| `fix` | string |  | human or agent |
+
+### chain
+
+| field | type | values | who writes |
+| --- | --- | --- | --- |
+| `title` *(required)* | string |  | human or agent |
+| `targetId` | string |  | human or agent |
+| `parts` | array |  | human or agent |
+| `glue` | string | `same-tx` `same-caller` `config+code` `social+code` `other` (default `other`) | human or agent |
+| `gluePermissionless` | boolean |  | human or agent |
+| `result` | string |  | human or agent |
+| `severity` | string | `critical` `high` `medium` `low` `info` (default `medium`) | human or agent |
 
 ### steer
 
@@ -151,7 +202,33 @@ ownership rule below comes straight from `src/model.js`, so agents can rely on i
 | `itemKind` | string |  | human or agent |
 | `steerKind` | string | `recheck` `challenge` `cover` `verify` `priority` `note` (default `cover`) | human or agent |
 | `rationale` | string |  | human or agent |
+| `options` | array |  | human or agent |
+| `choice` | string |  | human or agent |
 | `state` | string | `pending` `accepted` `declined` (default `pending`) | human or agent |
+
+### lead
+
+| field | type | values | who writes |
+| --- | --- | --- | --- |
+| `text` *(required)* | string |  | human or agent |
+| `why` | string |  | human or agent |
+| `value` | string | `high` `med` `low` (default `med`) | human or agent |
+| `state` | string | `open` `blocked` `done` `dropped` (default `open`) | human or agent |
+| `blockedBy` | string |  | human or agent |
+| `nextStep` | string |  | human or agent |
+| `outcome` | string |  | human or agent |
+| `targetId` | string |  | human or agent |
+| `componentId` | string |  | human or agent |
+| `itemId` | string |  | human or agent |
+
+### message
+
+| field | type | values | who writes |
+| --- | --- | --- | --- |
+| `text` *(required)* | string |  | human or agent |
+| `to` | array |  | human or agent |
+| `itemId` | string |  | human or agent |
+| `replyTo` | string |  | human or agent |
 
 ## Glossary of states
 

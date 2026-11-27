@@ -14,7 +14,9 @@ export function agentHealth(state, agent, now = Date.now()) {
   const since = now - lastSeen;
   let status = agent.status;
 
-  if (agent.transport === 'json') status = since > OFFLINE_AFTER ? 'idle' : 'active';
+  const listening = Boolean(agent.waitingSince && since < 60_000);
+  if (listening) { status = 'active'; flags.push('listening'); }
+  else if (agent.transport === 'json') status = since > OFFLINE_AFTER ? 'idle' : 'active';
   else if (since > OFFLINE_AFTER) status = 'offline';
   else if (agent.status === 'stuck') status = 'stuck';
   else if (since > IDLE_AFTER) status = 'idle';

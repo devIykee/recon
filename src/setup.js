@@ -96,7 +96,11 @@ export async function runAgent({ name, url, key, hunt = undefined, out = process
     `  ${R} report submit <file> [--finding <id>]       plain prose, checked against the skill; fix what it lists and resubmit`,
     `  ${R} skills [name]                              the human's other skills: follow the ones that fit`,
     '',
-    'Before you stop: report back on every steer, record what is left as leads, and end with a propose that offers the next moves.',
+    'Talk to the human on the board, not only in this terminal',
+    `  ${R} say "<update, answer or question>"            shows up in their Talk panel`,
+    `  ${R} wait                                         when you are done or blocked: blocks until they write to you, then prints it`,
+    '',
+    'Before you stop: report back on every steer, record what is left as leads, offer the next moves with propose, then run wait instead of ending.',
     '',
     'Rules',
     '  - Back every claim with evidence (file:line, function, tx). Unbacked claims get disputed, and disputes come back to you as steers.',
@@ -120,6 +124,22 @@ export async function runAgent({ name, url, key, hunt = undefined, out = process
 function has(cmd) {
   const r = spawnSync(process.platform === 'win32' ? 'where' : 'command', process.platform === 'win32' ? [cmd] : ['-v', cmd], { shell: process.platform !== 'win32', stdio: 'ignore' });
   return r.status === 0;
+}
+
+// Codex stops MCP tool calls after 60s by default; recon_wait listens longer.
+function codexToolTimeout(sec) {
+  const file = path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'config.toml');
+  try {
+    const src = fs.readFileSync(file, 'utf8');
+    const lines = src.split('\n');
+    const at = lines.findIndex((l) => /^\[mcp_servers\.("?)recon\1\]\s*$/.test(l.trim()));
+    if (at < 0) return;
+    let end = lines.findIndex((l, i) => i > at && /^\s*\[/.test(l));
+    if (end < 0) end = lines.length;
+    if (lines.slice(at, end).some((l) => /^\s*tool_timeout_sec\s*=/.test(l))) return;
+    lines.splice(at + 1, 0, `tool_timeout_sec = ${sec}`);
+    fs.writeFileSync(file, lines.join('\n'));
+  } catch { /* leave codex as it is */ }
 }
 
 function run(cmd, args) {
@@ -165,7 +185,9 @@ export function clients(home = os.homedir()) {
       id: 'codex', label: 'Codex CLI', present: () => has('codex'),
       register: (cmd, args) => {
         run('codex', ['mcp', 'remove', 'recon']);
-        return run('codex', ['mcp', 'add', 'recon', '--', cmd, ...args]);
+        const r = run('codex', ['mcp', 'add', 'recon', '--', cmd, ...args]);
+        if (r.ok) codexToolTimeout(600);
+        return r;
       },
     },
     {

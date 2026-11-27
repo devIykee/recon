@@ -12,12 +12,14 @@ const TABS = [
   { id: 'activity', label: 'Activity', icon: 'activity' },
   { id: 'steers', label: 'Steers', icon: 'flag' },
   { id: 'threads', label: 'Threads', icon: 'compass' },
+  { id: 'talk', label: 'Talk', icon: 'message' },
 ];
 
 export function createSidebar(root) {
   let tab = load() || 'next';
   const tabsEl = h('div.tabs', { role: 'tablist' });
   const panels = Object.fromEntries(TABS.map((t) => [t.id, h('div.tab-panel', { role: 'tabpanel', hidden: t.id !== tab })]));
+  panels.talk.classList.add('talk-panel');
   root.append(tabsEl, ...Object.values(panels));
   const steerStates = new Map();
   let feedFilter = 'all';
@@ -33,8 +35,9 @@ export function createSidebar(root) {
     const openSteers = list('steer', (s) => s.state === 'open').length;
     const pending = list('proposal', (p) => p.state === 'pending').length;
     const cards = forYouCards();
-    const counts = { activity: null, steers: list('steer', (s) => s.state !== 'addressed').length, next: cards.length + pending, threads: list('lead', (l) => l.state === 'open' || l.state === 'blocked').length };
-    const hot = { steers: openSteers > 0, next: pending > 0 || cards.some((c) => c.hot) };
+    const unread = tab === 'talk' ? 0 : list('message', (m) => m.createdAt > talkSeen()).length;
+    const counts = { activity: null, steers: list('steer', (s) => s.state !== 'addressed').length, next: cards.length + pending, threads: list('lead', (l) => l.state === 'open' || l.state === 'blocked').length, talk: unread };
+    const hot = { steers: openSteers > 0, next: pending > 0 || cards.some((c) => c.hot), talk: unread > 0 };
     setChildren(tabsEl, ...TABS.map((t) => h('button.tab', {
       role: 'tab', 'aria-selected': String(tab === t.id), on: { click: () => select(t.id) },
     }, icon(t.icon), t.label, counts[t.id] ? h(`span.n${hot[t.id] ? '.hot' : ''}`, counts[t.id]) : null)));
@@ -304,6 +307,100 @@ export function createSidebar(root) {
     else if (all.length) p.querySelector('.empty')?.remove();
   }
 
+  // ---------- talk: write to an agent without touching its terminal ----------
+
+  let talkTo = (() => { try { return localStorage.getItem('recon.talkTo') || 'all'; } catch { return 'all'; } })();
+
+  function renderTalk() {
+    const p = panels.talk;
+    if (!p.firstChild) {
+      const box = h('textarea.textarea.talk-input', { rows: 2, placeholder: 'Write to the agent. It answers here.' });
+      const send = async () => {
+        const note = box.value.trim();
+        if (!note) return;
+        box.disabled = true;
+        try {
+          await write.create('steer', { action: 'note', to: [talkTo], note });
+          box.value = '';
+        } catch (err) { toast(err.message, 'error'); }
+        box.disabled = false;
+        box.focus();
+      };
+      box.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+      p.append(
+        h('div.panel-head', h('h3', 'Talk')),
+        h('div.talk-who'),
+        h('div.talk-status'),
+        h('div.talk-log'),
+        h('div.talk-compose', box, h('button.btn.btn-primary.btn-sm', { on: { click: send } }, icon('send'), 'Send')),
+      );
+    }
+    const agents = list('agent').sort((a, b) => (b.lastSeen || b.updatedAt) - (a.lastSeen || a.updatedAt));
+    if (talkTo !== 'all' && !byId(talkTo)) talkTo = 'all';
+    const listening = (a) => Boolean(a.waitingSince) && healthOf(a.id).status !== 'offline';
+    setChildren(p.querySelector('.talk-who'),
+      h(`button.filter${talkTo === 'all' ? '.on' : ''}`, { 'aria-pressed': String(talkTo === 'all'), on: { click: () => pickTalk('all') } }, 'Everyone'),
+      ...agents.map((a) => h('button.filter', { 'aria-pressed': String(talkTo === a.id), on: { click: () => pickTalk(a.id) } },
+        h(`span.talk-dot.${listening(a) ? 'listening' : healthOf(a.id).status}`), a.name)));
+
+    const who = talkTo === 'all' ? null : byId(talkTo);
+    const st = who ? healthOf(who.id).status : null;
+    const anyListening = agents.filter(listening);
+    const line = who
+      ? listening(who) ? ['ok', `${who.name} is listening. It reads this the moment you send it.`]
+        : st === 'active' ? ['info', `${who.name} is working. It sees this with its next step and answers here.`]
+          : ['warn', `${who.name} is not connected right now. It sees this when it comes back. To keep an agent listening, tell it once: "when you are done, call recon_wait".`]
+      : anyListening.length ? ['ok', `${anyListening.map((a) => a.name).join(', ')} ${anyListening.length === 1 ? 'is' : 'are'} listening. Everyone else sees this with their next step.`]
+        : agents.length ? ['info', 'Goes to every agent. Each sees it with its next step and answers here.'] : ['warn', 'No agent has connected yet. Connect one (C) and it reads this when it starts.'];
+    setChildren(p.querySelector('.talk-status'), h(`div.talk-line.${line[0]}`, line[1]));
+
+    const mine = (by) => !who || by === who.id;
+    const toMe = (s) => !who || (s.to || []).includes(who.id) || (s.to || []).includes('all');
+    const entries = [
+      ...list('steer', (s) => s.createdBy === 'human' && toMe(s)).flatMap((s) => [
+        { at: s.createdAt, el: bubble('you', 'You', s.note, s.createdAt, h(`span.state-pill.${s.state}`, STEER_STATE[s.state]?.label || s.state), s) },
+        ...(s.response ? [{ at: s.updatedAt, el: bubble('agent', authorName(s._f?.response?.by || s.lastTouchedBy), s.response, s.updatedAt, null, null, s._f?.response?.by || s.lastTouchedBy) }] : []),
+      ]),
+      ...list('message', (m) => mine(m.createdBy)).map((m) => ({ at: m.createdAt, el: bubble('agent', authorName(m.createdBy), m.text, m.createdAt, null, byId(m.itemId), m.createdBy) })),
+      ...list('proposal', (x) => mine(x.createdBy)).map((x) => ({ at: x.createdAt, el: proposalBubble(x) })),
+    ].sort((a, b) => a.at - b.at).slice(-80);
+    const log = p.querySelector('.talk-log');
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+    if (entries.length) setChildren(log, ...entries.map((e) => e.el));
+    else setChildren(log, h('div.empty', h('span.hand', 'Nothing said yet'), 'Ask a question, point an agent somewhere, or tell it what you think. You do not need its terminal.'));
+    if (atBottom || !log._init) { log.scrollTop = log.scrollHeight; log._init = true; }
+    try { localStorage.setItem('recon.talkSeen', String(Date.now())); } catch { /* ignore */ }
+  }
+
+  function pickTalk(id) {
+    talkTo = id;
+    try { localStorage.setItem('recon.talkTo', id); } catch { /* ignore */ }
+    panels.talk.querySelector('.talk-log')._init = false;
+    render();
+    panels.talk.querySelector('.talk-input')?.focus();
+  }
+
+  function bubble(side, name, text, at, extra, item, author) {
+    return h(`div.bubble.${side}`,
+      h('div.bubble-head', side === 'agent' ? authorAvatar(author) : null, h('b', name), h('span.t', timeEl(at)), extra ? h('span.right', extra) : null),
+      h('div.bubble-text', text),
+      item && item.kind !== 'steer' ? h('div.steer-item', { on: { click: () => bus.open(item.id) } }, icon(KIND_ICON[item.kind]), titleOf(item)) : null);
+  }
+
+  function proposalBubble(x) {
+    const options = (x.options || []).filter(Boolean);
+    return h('div.bubble.agent.ask',
+      h('div.bubble-head', authorAvatar(x.createdBy), h('b', authorName(x.createdBy)), h('span.t', timeEl(x.createdAt))),
+      h('div.bubble-text', x.text),
+      x.rationale ? h('div.sug-why', x.rationale) : null,
+      x.state === 'pending'
+        ? h('div.sug-actions.options', ...(options.length
+          ? options.map((o, i) => h(`button.btn.btn-xs${i === 0 ? '.btn-primary' : ''}`, { on: { click: () => decide(x, 'accept', o) } }, o))
+          : [h('button.btn.btn-xs.btn-primary', { on: { click: () => decide(x, 'accept') } }, icon('check'), 'Yes, go')]),
+        h('button.btn.btn-xs', { on: { click: () => decide(x, 'decline') } }, icon('x'), options.length ? 'None of these' : 'No'))
+        : h('div.sug-actions', h(`span.state-pill.${x.state === 'accepted' ? 'addressed' : 'open'}`, x.state), x.choice ? h('span.verify-note', x.choice) : null));
+  }
+
   async function decide(x, verb, choice) {
     try {
       await post(`/api/proposals/${x.id}/${verb}`, choice ? { choice } : {});
@@ -325,9 +422,14 @@ export function createSidebar(root) {
     if (tab === 'steers') renderSteers();
     if (tab === 'next') renderNext();
     if (tab === 'threads') renderThreads();
+    if (tab === 'talk') renderTalk();
   }
 
   return { render, select, refreshReport, get tab() { return tab; }, plural };
+}
+
+function talkSeen() {
+  try { return Number(localStorage.getItem('recon.talkSeen')) || 0; } catch { return 0; }
 }
 
 function load() {

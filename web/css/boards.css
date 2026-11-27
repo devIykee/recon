@@ -543,3 +543,32 @@
 .snap { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 6px 8px; border-radius: 7px; background: var(--island-2); }
 .snap span { flex: 1; }
 @media (max-width: 800px) { .report-grid { grid-template-columns: 1fr; } }
+
+/* ---------- talk ---------- */
+.tab-panel.talk-panel { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
+.tab-panel.talk-panel[hidden] { display: none; }
+.talk-who { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 0 8px; }
+.talk-who .filter { display: inline-flex; align-items: center; gap: 5px; }
+.talk-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
+.talk-dot.active { background: var(--info, #4dabf7); }
+.talk-dot.listening { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); animation: listen 1.6s ease-in-out infinite; }
+.talk-dot.stuck { background: var(--warn); }
+@keyframes listen { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--ok) 5%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .talk-dot.listening { animation: none; } }
+.talk-status { padding: 0 0 8px; }
+.talk-line { font-size: 12px; line-height: 1.45; padding: 7px 10px; border-radius: 8px; background: var(--island-2); color: var(--muted); }
+.talk-line.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 9%, transparent); }
+.talk-line.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 9%, transparent); }
+.talk-log { flex: 1 1 auto; min-height: 120px; overflow: auto; padding: 6px 2px 10px; display: flex; flex-direction: column; gap: 8px; }
+.bubble { max-width: 92%; padding: 8px 10px; border-radius: 12px; background: var(--island-2); font-size: 13px; line-height: 1.45; }
+.bubble.you { align-self: flex-end; background: var(--primary-bg); border-bottom-right-radius: 4px; }
+.bubble.agent { align-self: flex-start; border-bottom-left-radius: 4px; }
+.bubble.ask { border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent); }
+.bubble-head { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); margin-bottom: 3px; }
+.bubble-head b { color: var(--text); font-weight: 600; }
+.bubble-head .t { color: var(--faint); }
+.bubble-head .right { margin-left: auto; }
+.bubble-text { white-space: pre-wrap; word-break: break-word; color: var(--text); }
+.bubble .sug-actions { margin-top: 6px; }
+.talk-compose { display: flex; gap: 6px; align-items: flex-end; padding: 10px 0 12px; border-top: 1px solid var(--border); flex: none; }
+.talk-compose .textarea { flex: 1; min-height: 40px; max-height: 140px; resize: vertical; }
