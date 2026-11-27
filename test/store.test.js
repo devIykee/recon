@@ -142,3 +142,17 @@ test('repeated no-op writes flag an agent as looping', async () => {
   for (let i = 0; i < 7; i++) s.patch('component', c.id, { notes: 'same' }, agent.id);
   assert.ok(agentHealth(s.state, s.get('agent', agent.id)).flags.includes('looping'));
 });
+
+test('relations are unique per edge and go away with their components', () => {
+  const { s, t, c, agent } = seeded();
+  const user = s.create('component', { targetId: t.id, name: 'User', type: 'actor' }, agent.id);
+  const r1 = s.create('relation', { targetId: t.id, from: user.id, to: c.id, type: 'calls' }, agent.id);
+  const r2 = s.create('relation', { targetId: t.id, from: user.id, to: c.id, type: 'calls', label: 'withdraw' }, agent.id);
+  assert.equal(r1.id, r2.id);
+  assert.equal(s.list('relation').length, 1);
+  assert.equal(s.list('relation')[0].label, 'withdraw');
+  assert.match(s.state.activity.find((a) => a.action === 'mapped').summary, /User calls withdraw\(\)/);
+  assert.throws(() => s.create('relation', { targetId: t.id, from: user.id, to: 'cp_nope' }, agent.id), /does not exist/);
+  s.remove('component', user.id, 'human');
+  assert.equal(s.list('relation').length, 0);
+});

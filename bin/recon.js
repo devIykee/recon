@@ -31,8 +31,12 @@ read
 
 write (as the human, or as an agent with --as NAME)
   recon add target <name> [--type lending] [--chain mainnet] [--components "A(),B()"]
-  recon add component <name> --target <target> [--type function] [--location path:line]
-  recon add assumption <text> [--target T] [--component C] [--rationale ...]
+  recon add component <name> --target <target> [--type function] [--summary ...] [--location path:line]
+  recon add actor|external <name> [--summary ...]          people/roles, and dependencies like tokens and oracles
+  recon relate <from> <to> <calls|reads|writes|transfers|mints|owns|configures|trusts|delegates|inherits> [label]
+  recon phase <target> <mapping|assumptions|hunting|reporting>
+  recon add assumption <text> [--origin developer|agent] [--category trust|invariant|input|external|economic]
+                              [--target T] [--component C] [--rationale ...]
   recon add hypothesis <text> [--component C] [--confidence low|med|high] [--class reentrancy]
   recon add finding <title> [--severity high] [--component C] [--stage testing] [--hypothesis H]
       any add takes --evidence "ref" or --evidence "ref|what it shows" (repeatable)
@@ -283,10 +287,21 @@ async function add() {
       return;
     }
     case 'component':
-      fields = { name: need(text, 'name'), targetId: need(await ref(flags.target, 'target'), '--target'), type: flags.type, location: flags.location };
-      break;
+    case 'actor':
+    case 'external': {
+      const type = kind === 'component' ? flags.type : kind;
+      const it = await api.create('component', clean({
+        ...base, name: need(text, 'name'), targetId: need(await ref(flags.target, 'target') || await onlyTarget(api), '--target'),
+        type, summary: flags.summary, location: flags.location, ...(kind !== 'component' ? { reviewState: 'reviewed' } : {}),
+      }));
+      out(it, () => `added ${type || 'component'} ${dim(it.id)}`);
+      return;
+    }
     case 'assumption':
-      fields = { text: need(text, 'text'), targetId: await ref(flags.target, 'target'), componentId: await ref(flags.component, 'component'), scope: flags.scope, rationale: flags.rationale };
+      fields = {
+        text: need(text, 'text'), targetId: await ref(flags.target, 'target') || await onlyTarget(api), componentId: await ref(flags.component, 'component'),
+        scope: flags.scope, rationale: flags.rationale, origin: flags.origin, category: flags.category,
+      };
       break;
     case 'hypothesis':
       fields = { text: need(text, 'text'), targetId: await ref(flags.target, 'target'), componentId: await ref(flags.component, 'component'), bugClass: flags.class, confidence: flags.confidence };
@@ -304,6 +319,27 @@ async function add() {
   if (fields.componentId && !fields.targetId && kind !== 'component') fields.targetId = (await api.resolve(fields.componentId, 'component')).item.targetId;
   const it = await api.create(kind, clean({ ...base, ...fields }));
   out(it, () => `added ${kind} ${dim(it.id)}`);
+}
+
+// With a single target on the board, --target can be left out.
+async function onlyTarget(api) {
+  const ts = await api.list('target');
+  return ts.length === 1 ? ts[0].id : undefined;
+}
+
+async function relate() {
+  const api = client();
+  const from = (await api.resolve(need(pos[0], 'from component'), 'component')).item;
+  const to = (await api.resolve(need(pos[1], 'to component'), 'component')).item;
+  const r = await api.create('relation', clean({ targetId: from.targetId, from: from.id, to: to.id, type: flags.type || pos[2], label: flags.label || pos.slice(3).join(' ') }));
+  out(r, () => `mapped ${from.name} ${r.type} ${to.name}`);
+}
+
+async function phase() {
+  const api = client();
+  const t = (await api.resolve(need(pos[0], 'target'), 'target')).item;
+  const r = await api.update('target', t.id, { phase: need(pos[1], 'phase (mapping|assumptions|hunting|reporting)') });
+  out(r, () => `${r.name} → ${r.phase}`);
 }
 
 async function coverage() {
@@ -498,7 +534,7 @@ const COMMANDS = {
   steers, ack: () => steerVerb('ack'), address: () => steerVerb('address'), steer,
   verify: () => verdict('verified'), dispute: () => verdict('disputed'), unverify: () => verdict('unverified'),
   accept: () => decide('accept'), decline: () => decide('decline'),
-  setup, agent: agentCmd, start, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
+  setup, agent: agentCmd, start, relate, phase, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
 };
 
 async function main() {

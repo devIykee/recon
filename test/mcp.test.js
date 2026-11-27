@@ -83,6 +83,23 @@ test('agents may replace the example, never a real engagement', async () => {
   await fetch(`http://127.0.0.1:${hub.port}/api/reset`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'example' }) });
 });
 
+test('recon_map builds the architecture by name and is idempotent', async () => {
+  const store = hub.tenant().store;
+  const args = {
+    target: 'Example Lending Market',
+    components: [{ name: 'Keeper', type: 'actor', summary: 'runs jobs' }, { name: 'InterestRateModel', summary: 'rates' }],
+    relations: [{ from: 'Keeper', to: 'InterestRateModel', type: 'calls', label: 'poke' }],
+  };
+  const r = await rpc.tool('recon_map', args);
+  assert.equal(r.isError, false);
+  assert.deepEqual(r.data.errors, []);
+  const before = store.list('relation').length;
+  await rpc.tool('recon_map', args);
+  assert.equal(store.list('relation').length, before);
+  assert.equal(store.list('component').filter((x) => x.name === 'Keeper').length, 1);
+  assert.equal(store.list('component').find((x) => x.name === 'InterestRateModel').summary, 'rates');
+});
+
 test('human-owned fields are refused with a helpful error', async () => {
   const r = await rpc.tool('recon_update', { ref: 'InterestRateModel', fields: { verification: 'verified' } });
   assert.equal(r.isError, true);

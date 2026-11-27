@@ -120,7 +120,7 @@ export class Store extends EventEmitter {
     const clean = validateFields(kind, fields, { author });
     this.checkRefs(kind, clean);
     const ts = at || this.tick();
-    const itemId = id || fields.id || (kind === 'agent' ? agentIdFor(clean.name) : newId(kind));
+    const itemId = id || fields.id || (kind === 'agent' ? agentIdFor(clean.name) : kind === 'relation' ? relationId(clean) : newId(kind));
     if (this.get(kind, itemId)) return this.patch(kind, itemId, fields, author, { at, silent });
     const item = {
       id: itemId,
@@ -137,8 +137,11 @@ export class Store extends EventEmitter {
     if (clean.checklist) item.checklist = mergeByKey({}, clean.checklist, author, ts);
     for (const key of Object.keys(clean)) item._f[key] = { at: ts, by: author };
     this.state.items[kind][itemId] = item;
-    const action = kind === 'agent' ? 'joined' : kind === 'steer' ? 'steered' : kind === 'proposal' ? 'proposed' : 'added';
-    const activity = this.log({ by: author, action, kind, itemId, summary: summarize(action, kind, item) }, ts);
+    const action = kind === 'agent' ? 'joined' : kind === 'steer' ? 'steered' : kind === 'proposal' ? 'proposed' : kind === 'relation' ? 'mapped' : 'added';
+    const summary = kind === 'relation'
+      ? `mapped ${label('component', this.get('component', item.from))} ${item.type} ${label('component', this.get('component', item.to))}${item.label ? ` (${trim(item.label, 40)})` : ''}`
+      : summarize(action, kind, item);
+    const activity = this.log({ by: author, action, kind, itemId, summary }, ts);
     this.afterWrite(kind, item, Object.keys(clean), author, { created: true });
     if (!silent) this.emitChange('upsert', kind, item, activity);
     this.save();
@@ -200,6 +203,10 @@ export class Store extends EventEmitter {
     // cascade: components of a removed target, and dangling links
     if (kind === 'target') {
       for (const c of this.list('component', { targetId: id })) delete this.state.items.component[c.id];
+      for (const r of this.list('relation', { targetId: id })) delete this.state.items.relation[r.id];
+    }
+    if (kind === 'component') {
+      for (const r of Object.values(this.state.items.relation)) if (r.from === id || r.to === id) delete this.state.items.relation[r.id];
     }
     const activity = this.log({ by: author, action: 'removed', kind, itemId: id, summary: summarize('removed', kind, item) });
     this.emitChange('remove', kind, item, activity);
@@ -359,7 +366,7 @@ export class Store extends EventEmitter {
     const items = docItems(doc);
     const result = { created: 0, updated: 0, errors: [] };
     // targets first so component refs resolve
-    const order = ['agent', 'target', 'component', 'hypothesis', 'finding', 'assumption', 'steer', 'proposal'];
+    const order = ['agent', 'target', 'component', 'relation', 'hypothesis', 'finding', 'assumption', 'steer', 'proposal'];
     for (const kind of order) {
       for (const raw of items[kind] || []) {
         try {
@@ -424,7 +431,7 @@ function docItems(doc) {
     return out;
   }
   const plural = {
-    agent: 'agents', target: 'targets', component: 'components', assumption: 'assumptions',
+    agent: 'agents', target: 'targets', component: 'components', relation: 'relations', assumption: 'assumptions',
     hypothesis: 'hypotheses', finding: 'findings', steer: 'steers', proposal: 'proposals',
   };
   for (const kind of KINDS) {
@@ -448,6 +455,12 @@ function docItems(doc) {
     });
   }
   return out;
+}
+
+// One relation per (from, to, type): mapping the same edge twice updates it.
+export function relationId(f) {
+  const h = crypto.createHash('sha1').update(`${f.from}|${f.to}|${f.type || 'calls'}`).digest('hex').slice(0, 12);
+  return `rl_${h}`;
 }
 
 function stableId(prefix, text) {

@@ -57,10 +57,48 @@ export function seedExample(store) {
 
   store.claim([borrow.id, liquidate.id], scout.id);
 
+  // The architecture map: who and what exists, and how it connects.
+  const oracle = Object.values(store.state.items.component).find((c) => c.name === 'PriceOracle.getPrice()');
+  const irm = Object.values(store.state.items.component).find((c) => c.name === 'InterestRateModel');
+  const gov = Object.values(store.state.items.component).find((c) => c.name === 'Governor.setRiskParams()');
+  const shareTok = Object.values(store.state.items.component).find((c) => c.name === 'ShareToken.transfer()');
+  const actor = (name, summary) => store.create('component', { targetId: t.id, name, type: 'actor', summary, reviewState: 'reviewed' }, scout.id);
+  const ext = (name, summary) => store.create('component', { targetId: t.id, name, type: 'external', summary, reviewState: 'reviewed' }, scout.id);
+  const user = actor('User', 'Deposits collateral, borrows, repays and withdraws.');
+  const liquidator = actor('Liquidator', 'Anyone who repays an unhealthy loan for a bonus.');
+  const timelock = actor('Timelock (governance)', 'Owner of risk parameters; 2-day delay.');
+  const feed = ext('Price feed', 'Push-based oracle network; prices per collateral asset.');
+  const token = ext('Collateral token', 'Standard ERC20 assumed; no fee-on-transfer.');
+  const summaries = {
+    [deposit.id]: 'Takes collateral, mints shares.', [withdraw.id]: 'Burns shares, pays collateral out.',
+    [borrow.id]: 'Lends against collateral if healthy.', [liquidate.id]: 'Closes unhealthy loans with a bonus.',
+    [oracle.id]: 'Reads and validates the feed price.', [irm.id]: 'Computes borrow rate from utilization.',
+    [flash.id]: 'Lends pool liquidity within one tx.', [gov.id]: 'Sets LTV, bonus and caps.', [shareTok.id]: 'Pool share token; checks health on transfer.',
+  };
+  for (const [id, summary] of Object.entries(summaries)) store.patch('component', id, { summary }, scout.id, { force: true });
+  const rel = (from, to, type, label) => store.create('relation', { targetId: t.id, from: from.id, to: to.id, type, label }, scout.id);
+  rel(user, deposit, 'calls'); rel(user, withdraw, 'calls'); rel(user, borrow, 'calls'); rel(user, flash, 'calls');
+  rel(liquidator, liquidate, 'calls');
+  rel(timelock, gov, 'owns', 'onlyTimelock');
+  rel(deposit, token, 'transfers', 'transferFrom user'); rel(withdraw, token, 'transfers', 'transfer to user');
+  rel(deposit, shareTok, 'mints', 'shares'); rel(withdraw, shareTok, 'writes', 'burns shares');
+  rel(borrow, oracle, 'reads', 'collateral price'); rel(liquidate, oracle, 'reads', 'collateral price');
+  rel(borrow, irm, 'reads', 'accrue interest'); rel(oracle, feed, 'reads', 'latestRoundData');
+  rel(gov, liquidate, 'configures', 'bonus, close factor'); rel(flash, token, 'transfers', 'lend + repay');
+
+  const devAsm = (text, category, rationale) => store.create('assumption', { text, targetId: t.id, origin: 'developer', category, rationale }, scout.id);
+  devAsm('The collateral token is a standard ERC20: no transfer fees, hooks or rebases.', 'input', 'Docs list only plain ERC20s; deposit() measures balances anyway.');
+  devAsm('Liquidations are always profitable enough that someone calls them.', 'economic', 'Bonus is 5-15%; nothing handles positions too small to be worth it.');
+  devAsm('Only the timelock can change risk parameters.', 'trust', 'onlyTimelock on Governor.setRiskParams().');
+  devAsm('Interest is accrued before any debt or balance is read.', 'invariant', 'accrueInterest() is the first call in borrow/repay/liquidate.');
+  store.patch('target', t.id, { phase: 'hunting' }, scout.id);
+
   store.create('assumption', {
     text: 'Prices only come from the push-based feed, never from pool reserves.',
     targetId: t.id,
     scope: 'PriceOracle and every caller of getPrice()',
+    origin: 'developer',
+    category: 'external',
     rationale: 'getPrice() reads only the feed address set at deployment, and no other price path was found in LendingPool.',
     evidence: [{ ref: 'contracts/oracle/PriceOracle.sol:40-60', note: 'single source; no fallback path' }],
   }, scout.id);

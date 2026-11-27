@@ -133,7 +133,7 @@ export class DemoAgent {
     if (mine) { this.finishComponent(id, mine); return; }
 
     const next = Object.values(items.component)
-      .filter((c) => c.reviewState === 'untouched' && (!c.owner || c.owner === id))
+      .filter((c) => c.reviewState === 'untouched' && c.type !== 'actor' && c.type !== 'external' && (!c.owner || c.owner === id))
       .sort((a, b) => rank(b.priority) - rank(a.priority))[0];
     if (next) { this.workComponent(id, next); return; }
 

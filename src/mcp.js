@@ -91,11 +91,63 @@ export const TOOLS = [
     },
   },
   {
+    name: 'recon_map',
+    description: 'Phase 1, before any vulnerability research: map how the system fits together. Add every contract/function, actor (type "actor": users, admins, keepers, liquidators) and external dependency (type "external": tokens, oracles, other protocols) with a one-line summary, and the relations between them. Components are matched by name, so calling this again extends or corrects the map. Relation types: calls, delegates, inherits, reads, writes, transfers, mints, owns, configures, trusts.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: str('Target id or name'),
+        components: {
+          type: 'array',
+          items: { type: 'object', properties: { name: str('e.g. "Vault.withdraw()", "Keeper", "USDC"'), type: en('componentKind', 'contract/function for code; actor for people and roles; external for dependencies'), summary: str('What it does, one line'), location: str('path:line') }, required: ['name'] },
+        },
+        relations: {
+          type: 'array',
+          items: { type: 'object', properties: { from: str('Component name'), to: str('Component name'), type: en('relationKind', 'How they connect'), label: str('e.g. "transferFrom user", "onlyOwner"') }, required: ['from', 'to'] },
+        },
+      },
+      required: ['target'],
+    },
+    run: async (c, a) => {
+      const t = (await c.resolve(a.target, 'target')).item;
+      const existing = (await c.list('component', { targetId: t.id }));
+      const byName = new Map(existing.map((x) => [x.name.toLowerCase(), x]));
+      const out = { components: 0, relations: 0, errors: [] };
+      for (const comp of a.components || []) {
+        try {
+          const cur = byName.get(comp.name.toLowerCase());
+          const fields = pick(comp, ['type', 'summary', 'location']);
+          const actorLike = comp.type === 'actor' || comp.type === 'external';
+          const item = cur ? await c.update('component', cur.id, fields) : await c.create('component', { ...comp, targetId: t.id, ...(actorLike ? { reviewState: 'reviewed' } : {}) });
+          byName.set(item.name.toLowerCase(), item);
+          out.components++;
+        } catch (err) { out.errors.push(`${comp.name}: ${err.message}`); }
+      }
+      for (const r of a.relations || []) {
+        const from = byName.get(String(r.from).toLowerCase());
+        const to = byName.get(String(r.to).toLowerCase());
+        if (!from || !to) { out.errors.push(`relation ${r.from} -> ${r.to}: add both components first`); continue; }
+        try { await c.create('relation', { targetId: t.id, from: from.id, to: to.id, type: r.type || 'calls', label: r.label || '' }); out.relations++; } catch (err) { out.errors.push(`${r.from} -> ${r.to}: ${err.message}`); }
+      }
+      const total = await c.list('relation', { targetId: t.id });
+      return { ...out, mapSize: { components: byName.size, relations: total.length }, phase: t.phase, next: t.phase === 'mapping' ? 'When the map is complete, call recon_phase with phase "assumptions".' : undefined };
+    },
+  },
+  {
+    name: 'recon_phase',
+    description: 'Move a target to the next phase once the current one is done: mapping -> assumptions -> hunting -> reporting.',
+    inputSchema: { type: 'object', properties: { target: str('Target id or name'), phase: en('phase', 'The phase to move to') }, required: ['target', 'phase'] },
+    run: async (c, a) => {
+      const t = (await c.resolve(a.target, 'target')).item;
+      return compact(await c.update('target', t.id, { phase: a.phase }));
+    },
+  },
+  {
     name: 'recon_add_component',
     description: 'Add a piece of attack surface (contract, function, endpoint...) to a target.',
     inputSchema: {
       type: 'object',
-      properties: { targetId: str('Target id or name'), name: str('e.g. "Vault.withdraw()"'), type: en('componentKind', 'What kind of piece'), location: str('path:line') },
+      properties: { targetId: str('Target id or name'), name: str('e.g. "Vault.withdraw()"'), type: en('componentKind', 'What kind of piece'), summary: str('What it does, one line'), location: str('path:line') },
       required: ['targetId', 'name'],
     },
     run: async (c, a) => {
@@ -127,11 +179,13 @@ export const TOOLS = [
   },
   {
     name: 'recon_add_assumption',
-    description: 'Record something you are taking for granted, so the human can challenge it. Include why it seems true.',
+    description: 'Record an assumption so the human can challenge it. In phase 2 record what the DEVELOPERS assume (origin "developer"): trust model, invariants, expected inputs and tokens, external dependencies. Later, record what you yourself take for granted (origin "agent"). Include why it seems true.',
     inputSchema: {
       type: 'object',
       properties: {
         text: str('e.g. "Only the owner can call setFee()"'), targetId: str('Target id'), componentId: str('Component id'),
+        origin: en('assumptionOrigin', 'developer: what the code\'s authors assume. agent: what you assume'),
+        category: en('assumptionCategory', 'trust | invariant | input | external | economic | other'),
         scope: str('Where it applies'), rationale: str('Why it seems true'), evidence: evidenceSchema,
       },
       required: ['text'],
@@ -259,7 +313,7 @@ export const TOOLS = [
 ];
 
 const INSTRUCTIONS = `recon is a shared board where you and a human research vulnerabilities together.
-Start with recon_briefing (if it says the board holds the example, call recon_start_engagement first). Acknowledge the human's steers right away (recon_steer), then work them.
+Start with recon_briefing (if it says the board holds the example, call recon_start_engagement first). Work every target in order: 1) map the system with recon_map, 2) record the developers' assumptions (origin "developer"), 3) hunt. Move phases with recon_phase. Acknowledge the human's steers right away (recon_steer), then work them.
 Record as you go: recon_coverage for what you reviewed, recon_add_assumption for what you take for granted,
 recon_add_hypothesis for suspected bugs, recon_add_finding once confirmed. Attach evidence (file:line, function,
 tx) to every claim; the human verifies or disputes claims and disputed ones come back to you.

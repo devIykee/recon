@@ -11,7 +11,11 @@ export const ENUMS = Object.freeze({
     'lending', 'amm', 'perps', 'bridge', 'staking', 'nft-market',
     'governance', 'oracle', 'token', 'vault', 'other',
   ],
-  componentKind: ['contract', 'function', 'module', 'endpoint', 'storage', 'config', 'other'],
+  componentKind: ['contract', 'function', 'module', 'endpoint', 'storage', 'config', 'actor', 'external', 'other'],
+  relationKind: ['calls', 'delegates', 'inherits', 'reads', 'writes', 'transfers', 'mints', 'owns', 'configures', 'trusts', 'other'],
+  phase: ['mapping', 'assumptions', 'hunting', 'reporting'],
+  assumptionOrigin: ['developer', 'agent'],
+  assumptionCategory: ['trust', 'invariant', 'input', 'external', 'economic', 'other'],
   reviewState: ['untouched', 'scanning', 'reviewed', 'flagged'],
   assumptionState: ['assumed', 'verified', 'invalidated'],
   confidence: ['low', 'med', 'high'],
@@ -28,8 +32,12 @@ export const ENUMS = Object.freeze({
 });
 
 export const KINDS = Object.freeze([
-  'agent', 'target', 'component', 'assumption', 'hypothesis', 'finding', 'steer', 'proposal',
+  'agent', 'target', 'component', 'relation', 'assumption', 'hypothesis', 'finding', 'steer', 'proposal',
 ]);
+
+// Component types that describe the system but are not attack surface to review.
+export const MAP_ONLY_TYPES = new Set(['actor', 'external']);
+export const isReviewable = (c) => !MAP_ONLY_TYPES.has(c?.type);
 
 // Who may write a field.
 //   human  - only a human (verification, priority, assignment). Agents are rejected.
@@ -72,19 +80,30 @@ export const SCHEMA = {
     description: str(),
     focus: str(),
     scope: str(),
+    phase: en('phase', A, 'mapping'),
   },
   component: {
     targetId: str(A, { required: true, ref: 'target' }),
     name: str(A, { required: true }),
     type: en('componentKind', A, 'contract'),
     reviewState: en('reviewState', A, 'untouched'),
+    summary: str(),
     location: str(),
     owner: str(),
     checklist: { type: 'object', owner: A, default: {}, merge: 'byKey' },
     notes: str(),
   },
+  relation: {
+    targetId: str(A, { required: true, ref: 'target' }),
+    from: str(A, { required: true, ref: 'component' }),
+    to: str(A, { required: true, ref: 'component' }),
+    type: en('relationKind', A, 'calls'),
+    label: str(),
+  },
   assumption: {
     text: str(A, { required: true }),
+    origin: en('assumptionOrigin', A, 'agent'),
+    category: en('assumptionCategory', A, 'other'),
     targetId: str(A, { ref: 'target' }),
     componentId: str(A, { ref: 'component' }),
     scope: str(),
@@ -135,12 +154,12 @@ export const SCHEMA = {
 
 // The field that names an item in the ui and in activity summaries.
 export const TITLE_FIELD = {
-  agent: 'name', target: 'name', component: 'name', assumption: 'text',
+  agent: 'name', target: 'name', component: 'name', relation: 'label', assumption: 'text',
   hypothesis: 'text', finding: 'title', steer: 'note', proposal: 'text',
 };
 
 // Fields whose change reads as "moved" in the activity feed.
-export const MOVE_FIELDS = new Set(['stage', 'status', 'reviewState', 'state']);
+export const MOVE_FIELDS = new Set(['stage', 'status', 'reviewState', 'state', 'phase']);
 
 export const SYSTEM_FIELDS = new Set([
   'id', 'kind', 'createdAt', 'updatedAt', 'createdBy', 'lastTouchedBy', '_f',
@@ -267,7 +286,7 @@ export function slug(text) {
 }
 
 const PREFIX = {
-  agent: 'ag', target: 'tg', component: 'cp', assumption: 'as', hypothesis: 'hy',
+  agent: 'ag', target: 'tg', component: 'cp', relation: 'rl', assumption: 'as', hypothesis: 'hy',
   finding: 'fd', steer: 'st', proposal: 'pr',
 };
 

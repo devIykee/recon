@@ -57,3 +57,21 @@ test('briefing tells an agent what to do next', () => {
   assert.ok(b.targets[0].playbook.classes.length);
   assert.equal(b.yourComponents.length, 2);
 });
+
+test('briefing walks a new target through map, assumptions, hunt', () => {
+  const s = new Store();
+  const t = s.create('target', { name: 'Vault', protocolType: 'vault' }, 'human');
+  s.create('component', { targetId: t.id, name: 'Vault.deposit()' }, 'human');
+  let b = briefing(s.state, 'ag_x');
+  assert.match(b.next, /Phase 1, map "Vault"/);
+  assert.ok(b.targets[0].developerAssumptionPrompts.length >= 3);
+  assert.equal(suggest(s.state)[0].rule, 'phase-mapping');
+  assert.ok(!suggest(s.state).some((x) => x.rule === 'untouched'), 'no hunting suggestions while mapping');
+  s.patch('target', t.id, { phase: 'assumptions' }, 'human');
+  b = briefing(s.state, 'ag_x');
+  assert.match(b.next, /Phase 2/);
+  s.patch('target', t.id, { phase: 'hunting' }, 'human');
+  b = briefing(s.state, 'ag_x');
+  assert.doesNotMatch(b.next, /Phase/);
+  assert.ok(suggest(s.state).some((x) => x.rule === 'untouched'));
+});

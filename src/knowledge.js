@@ -8,7 +8,7 @@
 //   - an agent briefing that hands agents the same context so they stay proactive
 
 import crypto from 'node:crypto';
-import { ENUMS } from './model.js';
+import { ENUMS, isReviewable } from './model.js';
 
 // ---------- exploit class library ----------
 
@@ -359,8 +359,102 @@ export const PLAYBOOKS = {
   },
 };
 
+// Assumptions developers of each protocol type commonly make. Each one is a prompt:
+// does this codebase make it, and does it actually hold?
+export const COMMON_ASSUMPTIONS = {
+  lending: [
+    ['external', 'The price feed is always fresh, positive and correct'],
+    ['economic', 'Liquidations are always profitable enough that someone will call them'],
+    ['invariant', 'Interest is accrued before any balance or debt is read'],
+    ['input', 'Collateral and debt tokens are standard ERC20s with fixed decimals'],
+    ['trust', 'Governance will never list a manipulable asset as collateral'],
+  ],
+  amm: [
+    ['invariant', 'The pool invariant (e.g. x*y=k) can only increase after fees'],
+    ['input', 'Users always pass a sensible minOut and deadline'],
+    ['input', 'Pool tokens do not take fees or rebase'],
+    ['external', 'Nobody else reads our spot price as an oracle'],
+  ],
+  perps: [
+    ['external', 'The index price cannot be moved within one block'],
+    ['invariant', 'Funding and fees are settled before every position change'],
+    ['economic', 'Keepers always liquidate in time, so bad debt never accrues'],
+    ['invariant', 'Open interest stays within the caps on every path'],
+  ],
+  bridge: [
+    ['trust', 'Only the trusted endpoint or relayer can deliver messages'],
+    ['invariant', 'Each message executes exactly once'],
+    ['external', 'The source chain does not reorganize after we act'],
+    ['trust', 'Validator or signer keys are never compromised'],
+  ],
+  staking: [
+    ['invariant', 'Reward accounting is updated before every stake change'],
+    ['economic', 'Nobody can stake and unstake in one block to farm rewards'],
+    ['invariant', 'Slashing reaches pending withdrawals too'],
+    ['invariant', 'The exchange rate can only go up (absent slashing)'],
+  ],
+  'nft-market': [
+    ['invariant', 'A cancelled or filled order can never be filled again'],
+    ['input', 'Signatures cover every field that matters, including the chain'],
+    ['economic', 'Royalties and fees never exceed the price'],
+    ['trust', 'Users only approve the marketplace for what they list'],
+  ],
+  governance: [
+    ['economic', 'Voting power cannot be borrowed for one block'],
+    ['trust', 'Every sensitive action goes through the timelock'],
+    ['trust', 'Proposals cannot call arbitrary, dangerous targets'],
+    ['invariant', 'Quorum cannot be reached by a single whale or flash loan'],
+  ],
+  oracle: [
+    ['trust', 'Only authorized reporters can push prices'],
+    ['external', 'Consumers check freshness and bounds themselves'],
+    ['economic', 'Manipulating the source costs more than it earns'],
+  ],
+  token: [
+    ['trust', 'Only the minter role can create supply'],
+    ['input', 'Integrators handle our transfer semantics (fees, hooks, rebases)'],
+    ['invariant', 'Total supply equals the sum of balances on every path'],
+  ],
+  vault: [
+    ['invariant', 'Share price cannot be inflated by donating assets'],
+    ['trust', 'The keeper/strategist is trusted and will not abuse harvest'],
+    ['input', 'The asset is a standard ERC20 (no fees, hooks or rebases)'],
+    ['invariant', 'State is updated before any external call or callback'],
+    ['economic', 'Harvest swaps cannot be sandwiched for profit'],
+  ],
+  other: [
+    ['trust', 'Admin and privileged roles are trusted and their keys are safe'],
+    ['input', 'Inputs are validated at the boundary'],
+    ['invariant', 'State is updated before external calls'],
+    ['external', 'External contracts behave as documented'],
+  ],
+};
+
 for (const t of ENUMS.protocolType) {
   if (!PLAYBOOKS[t]) throw new Error(`missing playbook for protocol type ${t}`);
+  if (!COMMON_ASSUMPTIONS[t]) throw new Error(`missing common assumptions for ${t}`);
+}
+
+export const PHASES = {
+  mapping: 'Map the system: every contract, actor and external dependency, and how they connect.',
+  assumptions: 'Write down what the developers assume: trust model, invariants, input and external expectations.',
+  hunting: 'Hunt: review each part against the playbook, form hypotheses, prove findings.',
+  reporting: 'Write up and disclose the findings.',
+};
+
+// How far a target's map and assumptions have come.
+export function phaseStatus(state, targetId) {
+  const comps = Object.values(state.items.component).filter((c) => c.targetId === targetId);
+  const rels = Object.values(state.items.relation || {}).filter((r) => r.targetId === targetId);
+  const asms = Object.values(state.items.assumption).filter((a) => a.targetId === targetId);
+  return {
+    components: comps.length,
+    actors: comps.filter((c) => c.type === 'actor').length,
+    externals: comps.filter((c) => c.type === 'external').length,
+    summarized: comps.filter((c) => c.summary).length,
+    relations: rels.length,
+    developerAssumptions: asms.filter((a) => a.origin === 'developer').length,
+  };
 }
 
 export function playbook(type) {
@@ -368,6 +462,7 @@ export function playbook(type) {
   return {
     type: PLAYBOOKS[type] ? type : 'other',
     ...pb,
+    commonAssumptions: (COMMON_ASSUMPTIONS[type] || COMMON_ASSUMPTIONS.other).map(([category, text]) => ({ category, text })),
     classes: pb.classes.map((id) => ({ id, ...CLASSES[id], checks: CLASSES[id].checks.map((text, i) => ({ id: `${id}.${i}`, text })) })),
   };
 }
@@ -449,6 +544,26 @@ export function suggest(state, { limit = 10 } = {}) {
   const out = [];
   const push = (s) => { if (!dismissed.has(s.id) && !steered(s.itemId, s.action)) out.push(s); };
 
+  // the default order: map first, then the developers' assumptions, then hunt
+  for (const t of Object.values(targets)) {
+    const ps = phaseStatus(state, t.id);
+    if ((t.phase || 'mapping') === 'mapping') {
+      push({
+        id: sid('map', t.id), rule: 'phase-mapping', action: 'cover', itemId: t.id, itemKind: 'target',
+        score: 90 + PRIORITY_BONUS[t.priority || 'normal'],
+        title: `Map how ${t.name} fits together`,
+        why: `Before hunting: list every contract, actor and external dependency and how they call, transfer to and trust each other. So far: ${ps.components} parts, ${ps.relations} connections.`,
+      });
+    } else if (t.phase === 'assumptions' || ps.developerAssumptions < 3) {
+      push({
+        id: sid('dev-assumptions', t.id), rule: 'phase-assumptions', action: 'cover', itemId: t.id, itemKind: 'target',
+        score: (t.phase === 'assumptions' ? 85 : 55) + PRIORITY_BONUS[t.priority || 'normal'],
+        title: `Write down what ${t.name}'s developers assume`,
+        why: `Trust model, invariants, what inputs and tokens they expect. Bugs live where these turn out false. ${ps.developerAssumptions} recorded so far.`,
+      });
+    }
+  }
+
   // disputed claims nobody is revisiting
   for (const kind of ['component', 'assumption', 'hypothesis', 'finding']) {
     for (const it of Object.values(items[kind])) {
@@ -464,8 +579,9 @@ export function suggest(state, { limit = 10 } = {}) {
 
   // untouched surface
   for (const c of Object.values(items.component)) {
-    if (c.reviewState !== 'untouched') continue;
+    if (c.reviewState !== 'untouched' || !isReviewable(c)) continue;
     const t = targets[c.targetId];
+    if ((t?.phase || 'mapping') === 'mapping') continue;
     push({
       id: sid('cover', c.id), rule: 'untouched', action: 'cover', itemId: c.id, itemKind: 'component',
       score: 50 + PRIORITY_BONUS[c.priority || 'normal'] + PRIORITY_BONUS[t?.priority || 'normal'],
@@ -523,8 +639,8 @@ export function suggest(state, { limit = 10 } = {}) {
 
   // playbook classes nobody has checked on a target
   for (const t of Object.values(targets)) {
-    const comps = Object.values(items.component).filter((c) => c.targetId === t.id);
-    if (!comps.length) continue;
+    const comps = Object.values(items.component).filter((c) => c.targetId === t.id && isReviewable(c));
+    if (!comps.length || (t.phase || 'mapping') === 'mapping') continue;
     const pb = playbook(t.protocolType);
     const hyps = Object.values(items.hypothesis).filter((h) => h.targetId === t.id);
     for (const cls of pb.classes.slice(0, 5)) {
@@ -562,7 +678,7 @@ export function briefing(state, agentId) {
   const assignment = new Set(me?.assignment || []);
   const owned = Object.values(items.component).filter((c) => c.owner === agentId || assignment.has(c.id) || assignment.has(c.targetId));
   const othersOwn = Object.values(items.component).filter((c) => c.owner && c.owner !== agentId).map((c) => ({ id: c.id, name: c.name, owner: c.owner }));
-  const untouched = Object.values(items.component).filter((c) => c.reviewState === 'untouched' && (!c.owner || c.owner === agentId))
+  const untouched = Object.values(items.component).filter((c) => isReviewable(c) && c.reviewState === 'untouched' && (!c.owner || c.owner === agentId))
     .sort((a, b) => priorityRank(b.priority) - priorityRank(a.priority))
     .map((c) => ({ id: c.id, name: c.name, targetId: c.targetId, priority: c.priority }));
   const disputed = [];
@@ -576,17 +692,30 @@ export function briefing(state, agentId) {
     .map((p) => ({ id: p.id, text: p.text, state: p.state }));
   const targets = Object.values(items.target).map((t) => {
     const pb = playbook(t.protocolType);
+    const phase = t.phase || 'mapping';
+    const comps = Object.values(items.component).filter((c) => c.targetId === t.id);
     return {
       id: t.id, name: t.name, chain: t.chain, protocolType: t.protocolType, priority: t.priority,
+      phase, phaseGoal: PHASES[phase], progress: phaseStatus(state, t.id),
+      map: {
+        components: comps.map((c) => ({ id: c.id, name: c.name, type: c.type, summary: c.summary || '' })),
+        relations: Object.values(items.relation || {}).filter((r) => r.targetId === t.id).map((r) => ({ from: items.component[r.from]?.name, to: items.component[r.to]?.name, type: r.type, label: r.label })),
+      },
+      developerAssumptionPrompts: phase === 'mapping' || phase === 'assumptions' ? pb.commonAssumptions : undefined,
       playbook: { name: pb.name, startHere: pb.startHere, classes: pb.classes.map((c) => ({ id: c.id, name: c.name, checks: c.checks })) },
     };
   });
+  const mappingT = targets.find((t) => t.phase === 'mapping');
+  const assumingT = targets.find((t) => t.phase === 'assumptions');
   const suggestions = suggest(state, { limit: 6 });
   let next;
   if (state.project.example) next = 'This board only holds the built-in example. Start the real engagement first (recon_start_engagement, or `recon start "<name>"`), then add the target you are researching and its components.';
   else if (steers.some((s) => s.state === 'open')) next = 'Acknowledge your open steers first (recon_steer with state=acknowledged), then work them.';
   else if (steers.length) next = 'Work your acknowledged steers and mark them addressed with a short response.';
   else if (disputed.length) next = 'A human disputed one of your claims. Revisit the evidence and either strengthen it or retract.';
+  else if (!targets.length) next = 'Add the target you are researching (recon_add_target), with its protocol type.';
+  else if (mappingT) next = `Phase 1, map "${mappingT.name}" before hunting: add every contract, actor (users, admins, keepers) and external dependency (tokens, oracles) as components with a one-line summary, and every connection between them (calls, transfers, reads, owns, trusts). Use recon_map. Then set the phase to "assumptions" (recon_phase).`;
+  else if (assumingT) next = `Phase 2, write down what "${assumingT.name}"'s developers assume: who is trusted, which invariants must hold, what inputs and tokens they expect, what external systems they rely on. Record each with recon_add_assumption origin="developer" and a category; use developerAssumptionPrompts as a starting list and keep only the ones this code actually makes. Then set the phase to "hunting".`;
   else if (owned.some((c) => c.reviewState !== 'reviewed')) next = 'Continue on the components you own or were assigned.';
   else if (suggestions.length) next = `Propose your next move (recon_propose). A good candidate: "${suggestions[0].title}".`;
   else next = 'Everything is covered. Propose deeper checks or new hypotheses.';
@@ -609,6 +738,7 @@ export function briefing(state, agentId) {
     suggestions: suggestions.map(({ id, title, why, action, itemId, itemKind }) => ({ id, title, why, action, itemId, itemKind })),
     targets,
     rules: [
+      'Work in order for every target: map the system, then record the developers\' assumptions, then hunt. Do not skip to vulnerabilities.',
       'Attach evidence (file:line, function, tx hash) to every claim. Unbacked claims get disputed.',
       'Do not set verification or priority; those belong to the human.',
       'Do not overwrite components owned by another agent. Add evidence instead.',
