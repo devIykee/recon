@@ -36,6 +36,7 @@ export function createSystemMap() {
   let el = null;
   let parts = null; // the dom pieces that survive re-renders
   let size = { W: 0, H: 0 };
+  let last = null; // the latest layout, for the flow panel and the overview
 
   function build() {
     const search = h('input.input.sm-search', { type: 'search', placeholder: 'Find a part…', 'aria-label': 'Find a part' });
@@ -66,8 +67,11 @@ export function createSystemMap() {
         h('span.sep'),
         h('button.tool.sm', { 'aria-label': 'Fit to screen', 'data-tip': 'Fit everything ( F )', on: { click: () => fit() } }, icon('target')),
         full),
-      h('div.sm-hint', 'Drag to move · scroll or pinch to zoom · click a part to see only its connections · Esc to let go'));
-    parts = { search, viewport, world, side, zoomLabel, full };
+      h('div.sm-flow.island'),
+      h('div.sm-mini.island', { 'aria-label': 'Overview: click to jump there' }),
+      h('div.sm-hint', 'Drag to move · scroll or pinch to zoom · click a part to follow its connections · Esc to let go'));
+    parts = { search, viewport, world, side, zoomLabel, full, flow: el.querySelector('.sm-flow'), mini: el.querySelector('.sm-mini') };
+    parts.mini.addEventListener('pointerdown', (e) => { e.stopPropagation(); jumpFromMini(e); });
     document.addEventListener('fullscreenchange', () => { el.classList.toggle('is-full', document.fullscreenElement === el); requestAnimationFrame(() => fit()); });
     panZoom(viewport);
     viewport.addEventListener('click', (e) => {
@@ -253,8 +257,143 @@ export function createSystemMap() {
       canvas.append(node);
     }
     world.replaceChildren(canvas);
+    last = { comps, edges, pos, W, H: size.H, top, canvas };
+    renderFlow();
+    renderMini();
     if (!fitted.has(targetId)) { fitted.add(targetId); requestAnimationFrame(() => fit(false)); }
     renderSide(comps, rels);
+  }
+
+  // ---------- the flow: every path through the picked part, start to end ----------
+
+  // Paths from where things start (people, or parts nothing reaches) through the
+  // picked part to where they end. Bounded so a large map stays readable.
+  function flowsThrough(id, edges) {
+    const out = new Map();
+    const inc = new Map();
+    for (const e of edges) {
+      if (!out.has(e.from)) out.set(e.from, []);
+      if (!inc.has(e.to)) inc.set(e.to, []);
+      out.get(e.from).push(e);
+      inc.get(e.to).push(e);
+    }
+    const walk = (start, next, end) => {
+      const paths = [];
+      const go = (node, path, seen) => {
+        if (paths.length >= 24) return;
+        const steps = (next.get(node) || []).filter((e) => !seen.has(end(e)));
+        if (!steps.length || path.length >= 5) { paths.push(path); return; }
+        for (const e of steps) go(end(e), [...path, e], new Set([...seen, end(e)]));
+      };
+      go(start, [], new Set([start]));
+      return paths;
+    };
+    const ups = walk(id, inc, (e) => e.from).map((p) => p.reverse());
+    const downs = walk(id, out, (e) => e.to);
+    const rows = [];
+    for (const u of ups) for (const d of downs) { rows.push([...u, ...d]); if (rows.length >= 40) break; }
+    rows.sort((a, b) => b.length - a.length);
+    return { rows: rows.slice(0, 12), total: rows.length };
+  }
+
+  function renderFlow() {
+    const panel = parts.flow;
+    if (!picked || !last) { panel.hidden = true; el.classList.remove('with-flow'); return; }
+    const it = byId(picked);
+    const { rows, total } = flowsThrough(picked, last.edges);
+    panel.hidden = false;
+    el.classList.add('with-flow');
+    const chip = (id) => {
+      const c = byId(id);
+      const ext = c && !isCode(c);
+      return h(`button.flow-node${id === picked ? '.here' : ''}`, {
+        'data-type': c?.type || '', title: c?.summary || '',
+        on: { click: () => { picked = id; showAssumptions = false; draw(true); requestAnimationFrame(() => centerOn(id)); } },
+      }, ext ? icon((COMPONENT_TYPE[c.type] || COMPONENT_TYPE.other).icon) : null, c?.name || '?');
+    };
+    const step = (e) => {
+      const m = RELATION[e.type] || RELATION.other;
+      return h('span.flow-step', { style: { '--c': m.color }, title: e.label || '' }, h('span.v', m.label), e.label ? h('span.l', truncate(e.label, 22)) : null, h('span.arrow', '→'));
+    };
+    const row = (path) => {
+      const ids = [path[0]?.from ?? picked, ...path.map((e) => e.to)];
+      const r = h('div.flow-row');
+      if (!path.length) r.append(chip(picked));
+      else { r.append(chip(path[0].from)); for (const e of path) r.append(step(e), chip(e.to)); }
+      r.addEventListener('pointerenter', () => lightPath(ids, path, true));
+      r.addEventListener('pointerleave', () => lightPath(ids, path, false));
+      return r;
+    };
+    setChildren(panel,
+      h('div.flow-head',
+        h('b', 'Flow through ', h('span.flow-here', it?.name || '')),
+        h('span.meta', rows.length && rows[0].length ? `${total} path${total === 1 ? '' : 's'} from where it starts to where it ends${total > rows.length ? `, longest ${rows.length} shown` : ''} · click a step to follow it` : 'Nothing connects to it yet'),
+        h('button.tool.sm', { 'aria-label': 'Close the flow', on: { click: () => { picked = null; draw(true); } } }, icon('x'))),
+      h('div.flow-rows', ...(rows.length ? rows : [[]]).map(row)));
+  }
+
+  function lightPath(ids, path, on) {
+    const canvas = last?.canvas;
+    if (!canvas) return;
+    canvas.classList.toggle('pathing', on);
+    const set = new Set(ids);
+    for (const n of canvas.querySelectorAll('.sm-node')) n.classList.toggle('on-path', on && set.has(n.dataset.id));
+    const keys = new Set(path.map((e) => `${e.from}>${e.to}`));
+    for (const g of canvas.querySelectorAll('.sm-edge')) g.classList.toggle('on-path', on && keys.has(`${g.dataset.from}>${g.dataset.to}`));
+  }
+
+  // ---------- the overview: the whole map small, with where you are ----------
+
+  const MINI_W = 200;
+  function renderMini() {
+    const box = parts.mini;
+    if (!last || !last.comps.length) { box.hidden = true; return; }
+    box.hidden = false;
+    const k = MINI_W / last.W;
+    const hgt = Math.max(60, Math.min(150, last.H * k));
+    const kk = Math.min(k, hgt / last.H);
+    const svg = svgEl('svg', { width: MINI_W, height: hgt, viewBox: `0 0 ${MINI_W} ${hgt}` });
+    const ox = (MINI_W - last.W * kk) / 2;
+    const near = new Set(picked ? [picked, ...last.edges.filter((e) => e.from === picked || e.to === picked).flatMap((e) => [e.from, e.to])] : []);
+    for (const e of last.edges) {
+      const a = last.pos.get(e.from);
+      const b = last.pos.get(e.to);
+      const hot = picked && (e.from === picked || e.to === picked);
+      svg.append(svgEl('line', { x1: ox + (a.x + a.w / 2) * kk, y1: (a.y + last.top + a.h / 2) * kk, x2: ox + (b.x + b.w / 2) * kk, y2: (b.y + last.top + b.h / 2) * kk, class: `mini-edge${hot ? ' hot' : ''}`, style: `--c:${(RELATION[e.type] || RELATION.other).color}` }));
+    }
+    for (const c of last.comps) {
+      const p = last.pos.get(c.id);
+      svg.append(svgEl('rect', { x: ox + p.x * kk, y: (p.y + last.top) * kk, width: Math.max(3, p.w * kk), height: Math.max(2, p.h * kk), rx: 1.5, class: `mini-node${c.id === picked ? ' here' : near.has(c.id) ? ' near' : ''}`, 'data-type': c.type }));
+    }
+    const view = svgEl('rect', { class: 'mini-view', rx: 2 });
+    svg.append(view);
+    box.replaceChildren(svg);
+    parts.miniMap = { kk, ox, view, hgt };
+    paintMiniView();
+  }
+
+  function paintMiniView() {
+    const m = parts.miniMap;
+    if (!m || parts.mini.hidden) return;
+    const r = parts.viewport.getBoundingClientRect();
+    const x = (-cam.x / cam.z) * m.kk + m.ox;
+    const y = (-cam.y / cam.z) * m.kk;
+    m.view.setAttribute('x', Math.max(0, x));
+    m.view.setAttribute('y', Math.max(0, y));
+    m.view.setAttribute('width', Math.max(4, Math.min(MINI_W, (r.width / cam.z) * m.kk)));
+    m.view.setAttribute('height', Math.max(4, Math.min(m.hgt, (r.height / cam.z) * m.kk)));
+  }
+
+  function jumpFromMini(e) {
+    const m = parts.miniMap;
+    if (!m) return;
+    const b = parts.mini.querySelector('svg').getBoundingClientRect();
+    const wx = (e.clientX - b.left - m.ox) / m.kk;
+    const wy = (e.clientY - b.top) / m.kk;
+    const r = parts.viewport.getBoundingClientRect();
+    cam.x = r.width / 2 - wx * cam.z;
+    cam.y = r.height / 2 - wy * cam.z;
+    apply();
   }
 
   // Hover only toggles classes: no redraw while the mouse moves.
@@ -318,6 +457,7 @@ export function createSystemMap() {
   function apply() {
     parts.world.style.transform = `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})`;
     parts.zoomLabel.textContent = `${Math.round(cam.z * 100)}%`;
+    paintMiniView();
   }
   function zoomTo(z) { const r = parts.viewport.getBoundingClientRect(); zoomAt(z, r.left + r.width / 2, r.top + r.height / 2); }
   function toggleFullscreen() {
@@ -330,7 +470,9 @@ export function createSystemMap() {
     const top = el.querySelector('.sm-overlay').getBoundingClientRect();
     const sideOn = el.classList.contains('with-side');
     const sideR = parts.side.getBoundingClientRect();
-    return { left: 16, top: top.bottom - r.top + 12, right: (sideOn ? sideR.left - r.left : r.width) - 16, bottom: r.height - 64 };
+    const flowOn = el.classList.contains('with-flow');
+    const flowR = parts.flow.getBoundingClientRect();
+    return { left: 16, top: top.bottom - r.top + 12, right: (sideOn ? sideR.left - r.left : r.width) - 16, bottom: (flowOn ? flowR.top - r.top - 12 : r.height - 64) };
   }
   function zoomAt(z, sx, sy) {
     const r = parts.viewport.getBoundingClientRect();

@@ -85,7 +85,10 @@ marker walks to whatever it is working on. Click anything to expand it in place.
 that use it and the outside systems it depends on, with each connection drawn
 as a colored arrow. Zoom and drag it like a canvas, or go browser full screen.
 Click a part and everything unrelated fades, so you can read what it calls and
-what can reach it.
+what can reach it; below the map, its full flow appears: every path from where
+it starts to where it ends, each step clickable to follow it, so you see the
+zoomed-in and the zoomed-out view at once. An overview in the corner shows
+where you are.
 
 **Boards** for coverage, assumptions, hypotheses, the findings pipeline
 (recon → testing → reported → acknowledged → fixed → disclosed, drag to move),
