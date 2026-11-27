@@ -134,6 +134,7 @@ export class Store extends EventEmitter {
     };
     if (kind === 'agent' && !item.color) item.color = AGENT_COLORS[Object.keys(this.state.items.agent).length % AGENT_COLORS.length];
     if (kind === 'agent' && !item.avatar) item.avatar = initials(item.name);
+    if (clean.checklist) item.checklist = mergeByKey({}, clean.checklist, author, ts);
     for (const key of Object.keys(clean)) item._f[key] = { at: ts, by: author };
     this.state.items[kind][itemId] = item;
     const activity = this.log({
