@@ -122,6 +122,30 @@ at once, and an overview in the corner shows where you are.
 
 ![Following a connection: the part, its card, and the full flow below](docs/img/flow.jpg)
 
+**Rules it must never break.** A contract is just logic, so instead of only
+hunting for weak spots one hope at a time, write down what must always be true
+and let a machine look for the inputs that make it false. Under *Rules* on the
+system map you write them in plain words ("nobody withdraws more than they
+deposited plus their share of the gains") and pick the state each one is about
+from what the scanner found in the code; recon suggests starter rules for the
+protocol type with that state already filled in. Pick a rule and the map
+becomes a lens: every function that can change that state lights up, red when
+anyone can call it, amber when only a role can, and the panel below lists
+exactly who calls what, the state it writes, and the file and line. That is
+where an ant could crawl in, before a single test runs.
+
+Then an agent tries to break each rule with a real engine: a Foundry invariant
+test, Echidna or Medusa, or a symbolic run with Halmos, hevm or Certora, which
+search the combinations of callers and values for you. recon does not pretend to
+be one of those engines; it gives them the rules, aims them at the exposed
+state, and keeps the results honest. "Holds" has to say which engine tried and
+how hard (runs, depth, senders), because it means not broken within those
+bounds, not proven. "Broken" has to carry the counterexample, and becomes a
+suspected bug on the board with that exact call sequence as its trigger, ready
+to be confirmed and reported.
+
+![The rule lens: what can change the state a rule depends on](docs/img/rules.jpg)
+
 **Everything explains itself.** Click any card, sticky note or tile and it opens
 with a few plain sentences first: what it is, what is known, what is still open,
 and what you can do about it ("Point an agent here", "Looks fine to me",
@@ -248,7 +272,7 @@ by author. Nothing needs a refresh.
 
 | | |
 | --- | --- |
-| **MCP** | `recon mcp --name my-agent`: 29 tools (briefing, scan and map, coverage, suspected bugs, findings, steers, proposals, talk and wait, skills, the report…) and your skills as prompts. Starts a local board if none is running. |
+| **MCP** | `recon mcp --name my-agent`: 32 tools (briefing, scan and map, rules and their results, coverage, suspected bugs, findings, steers, proposals, talk and wait, skills, the report…) and your skills as prompts. Starts a local board if none is running. |
 | **CLI** | `RECON_AGENT=my-agent recon briefing`, `recon scan . --target Vault`, `recon coverage "Vault.withdraw()" reviewed --evidence "Vault.sol:120"`, `recon wait`… |
 | **HTTP + WebSocket** | REST writes with `X-Recon-Agent: my-agent`; a socket at `/ws` streams every change; MCP over HTTP at `/mcp`. |
 | **Drop-in JSON** | `recon serve --watch inbox.json`: your agent writes a file and recon merges it item by item. |
@@ -336,7 +360,8 @@ src/engagements.js  hunts: one file each, snapshots, restore, trash
 src/quality.js      the gates: steers, confirmation card, severity, evidence, duplicates
 src/proactive.js    what an agent must do now, its pulse, before-you-stop
 src/knowledge.js    exploit classes, playbooks, checklists, suggestions, the briefing
-src/scan.js         the Solidity scanner; mapping.js applies a map to the board
+src/scan.js         the Solidity scanner: parts, connections, and each function's callers and state
+src/rules.js        rules: exposure (who can change their state), starter rules, engine hints
 src/report.js       the report brief, the prose checks, submission
 src/skills.js       skills as SKILL.md folders, with the built-in disclosure skill
 src/hub.js          http api, websocket, auth/tenancy, mcp over http, static ui

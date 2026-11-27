@@ -8,6 +8,7 @@
 
 import { openSteersFor, cardGaps, severityProblem, ackedSteersFor, steersBeingIgnored } from './quality.js';
 import { phaseStatus } from './knowledge.js';
+import { ruleExposure, ENGINE_HINTS } from './rules.js';
 
 const OVERDUE = 30 * 60_000;
 const name = (it) => it?.name || it?.title || it?.text || it?.note || it?.id || '';
@@ -81,6 +82,19 @@ export function mustDo(state, agentId, now = Date.now()) {
   }
   if (reportable.length && !report.shape) {
     add('report', null, `${reportable.length} finding(s) are ready: ask the human how they want the report (one combined document, or one per finding) and where to write it, instead of drafting in chat`, 'recon_propose with options ["combined", "separate"]');
+  }
+
+  // rules: write them, then try to break them, riskiest first (not on the built-in example)
+  for (const t of state.project.example ? [] : Object.values(items.target)) {
+    if ((t.phase || 'mapping') === 'mapping') continue;
+    const rules = Object.values(items.rule || {}).filter((r) => r.targetId === t.id);
+    if (!rules.length) { add('rules', t, `write the rules "${t.name}" must never break (e.g. nobody withdraws more than they put in), each with the state it is about`, 'recon_rules (suggests some from the code), then recon_add_rule'); continue; }
+    const untested = rules.filter((r) => r.status === 'untested' && (mine(r) || !r.createdBy?.startsWith('ag_')))
+      .map((r) => ({ r, x: ruleExposure(state, r) }))
+      .sort((a, b) => ['open', 'guarded', 'internal', 'untouched', 'unscoped', 'unmapped'].indexOf(a.x.level) - ['open', 'guarded', 'internal', 'untouched', 'unscoped', 'unmapped'].indexOf(b.x.level));
+    for (const { r, x } of untested.slice(0, 3)) {
+      add('rule', r, `try to break the rule "${short(r.text, 70)}"${x.level === 'open' ? ` (anyone can change its state: ${x.writers.filter((w) => w.access === 'anyone').slice(0, 3).map((w) => `${w.component}.${w.fn}`).join(', ')})` : ''}`, `write it as ${ENGINE_HINTS['foundry-invariant']} (or Halmos/Echidna), run it, then recon_rule_result`);
+    }
   }
 
   for (const l of Object.values(items.lead)) {

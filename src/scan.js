@@ -123,6 +123,43 @@ function stateVars(decl, known) {
   return vars;
 }
 
+// Every state variable of a contract (any type), from its top level.
+function allStateVars(decl) {
+  let depth = 0;
+  let top = '';
+  for (const ch of decl.body) {
+    if (ch === '{') depth++;
+    if (depth === 0) top += ch;
+    if (ch === '}') depth--;
+  }
+  const names = new Set();
+  for (const stmt of top.split(';')) {
+    const st = stmt.replace(/\s+/g, ' ').trim();
+    if (!st || /^(event|error|using|struct|enum|modifier|function|constructor|pragma|import|type)\b/.test(st)) continue;
+    // drop the initializer, then the last identifier is the name
+    const head = st.split(/=(?!>)/)[0].trim();
+    if (!/^(mapping\s*\(|[A-Za-z_]\w*)/.test(head)) continue;
+    const m = head.match(/(\w+)\s*$/);
+    if (!m || /^(public|private|internal|immutable|constant|override|payable)$/.test(m[1])) continue;
+    if (/\bconstant\b/.test(head)) continue;
+    names.add(m[1]);
+  }
+  return names;
+}
+
+// Which state a function body writes and reads.
+function stateAccess(body, vars) {
+  const writes = new Set();
+  const reads = new Set();
+  for (const v of vars) {
+    const id = `\\b${v}\\b`;
+    const write = new RegExp(`(^|[^.\\w])${v}\\s*(\\[[^\\]]*\\]\\s*)*(\\.\\w+\\s*)*(\\+\\+|--|[-+*/%|&^]?=(?!=)|\\.push\\s*\\(|\\.pop\\s*\\()|\\b(delete)\\s+${v}\\b|(\\+\\+|--)\\s*${v}\\b`);
+    if (write.test(body)) writes.add(v);
+    else if (new RegExp(id).test(body)) reads.add(v);
+  }
+  return { writes: [...writes], reads: [...reads] };
+}
+
 const roleName = (mod) => {
   const r = mod.replace(/^only/, '').replace(/Or\w+$/, '');
   return r ? `${r.charAt(0).toUpperCase()}${r.slice(1)}` : 'Owner';
@@ -140,6 +177,7 @@ export function scanSolidity(root, { includeTests = false } = {}) {
 
   const components = new Map();
   const relations = new Map();
+  const surfaces = new Map();
   const addComp = (name, type, summary, location) => { if (!components.has(name)) components.set(name, { name, type, summary, location }); };
   const addRel = (from, to, type, label) => {
     if (from === to) return;
@@ -165,6 +203,32 @@ export function scanSolidity(root, { includeTests = false } = {}) {
       `${d.file}:${d.line}`);
     for (const p of d.parents) if (known.has(p) && byName.get(p).kind !== 'interface') addRel(d.name, p, 'inherits', '');
     const vars = stateVars(d, known);
+    // state declared here and in the contracts it inherits from
+    const own = new Set(allStateVars(d));
+    for (const p of d.parents) { const pd = byName.get(p); if (pd && pd.kind !== 'interface') for (const v of allStateVars(pd)) own.add(v); }
+    const access = new Map(fns.map((f) => [f.name, stateAccess(f.body, own)]));
+    // a public function also writes what the internal helpers it calls write
+    for (let pass = 0; pass < 3; pass++) {
+      for (const f of fns) {
+        const a = access.get(f.name);
+        for (const g of fns) {
+          if (g === f || (g.visibility !== 'internal' && g.visibility !== 'private')) continue;
+          if (!new RegExp(`\\b${g.name}\\s*\\(`).test(f.body)) continue;
+          const ga = access.get(g.name);
+          a.writes = [...new Set([...a.writes, ...ga.writes])];
+          a.reads = [...new Set([...a.reads, ...ga.reads])].filter((x) => !a.writes.includes(x));
+        }
+      }
+    }
+    surfaces.set(d.name, fns.filter((f) => f.name !== 'constructor').map((f) => {
+      const roles = f.modifiers.filter((x) => x.startsWith('only')).map(roleName);
+      const req = [...f.body.matchAll(/require\s*\(\s*msg\.sender\s*==\s*([\w.]+)(?:\(\))?/g)].map((x) => { const r = x[1].split('.').pop(); return r.charAt(0).toUpperCase() + r.slice(1); });
+      const external = f.visibility === 'external' || f.visibility === 'public';
+      const view = f.mutability === 'view' || f.mutability === 'pure';
+      const who = !external ? 'internal' : view ? 'view' : roles.length || req.length ? `role:${[...roles, ...req].join('|')}` : 'anyone';
+      const a = access.get(f.name);
+      return { fn: `${f.name}()`, access: who, writes: a.writes, reads: a.reads, line: f.line };
+    }));
 
     for (const f of fns) {
       const b = f.body;
@@ -206,6 +270,7 @@ export function scanSolidity(root, { includeTests = false } = {}) {
     }
   }
 
+  for (const [name, surface] of surfaces) if (components.has(name)) components.get(name).surface = surface;
   return {
     files: files.map((f) => path.relative(base, f) || path.basename(f)),
     components: [...components.values()],

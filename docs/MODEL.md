@@ -100,6 +100,7 @@ ownership rule below comes straight from `src/model.js`, so agents can rely on i
 | `owner` | string |  | human or agent |
 | `checklist` | object |  | human or agent |
 | `notes` | string |  | human or agent |
+| `surface` | array |  | human or agent |
 
 ### relation
 
@@ -229,6 +230,21 @@ ownership rule below comes straight from `src/model.js`, so agents can rely on i
 | `to` | array |  | human or agent |
 | `itemId` | string |  | human or agent |
 | `replyTo` | string |  | human or agent |
+
+### rule
+
+| field | type | values | who writes |
+| --- | --- | --- | --- |
+| `text` *(required)* | string |  | human or agent |
+| `targetId` | string |  | human or agent |
+| `category` | string | `conservation` `solvency` `accounting` `bound` `access` `ordering` `other` (default `conservation`) | human or agent |
+| `state` | array |  | human or agent |
+| `formal` | string |  | human or agent |
+| `engine` | string | `foundry-invariant` `foundry-fuzz` `halmos` `hevm` `echidna` `medusa` `certora` `kontrol` `manual` | human or agent |
+| `status` | string | `untested` `holds` `broken` `inconclusive` (default `untested`) | human or agent |
+| `runs` | string |  | human or agent |
+| `counterexample` | string |  | human or agent |
+| `hypothesisId` | string |  | human or agent |
 
 ## Glossary of states
 

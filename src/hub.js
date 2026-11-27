@@ -20,6 +20,7 @@ import { mustDo, pulse, whereWeLeftOff } from './proactive.js';
 import { cardGaps, severityProblem, evidenceGaps, duplicateOf, reportedMatch, openSteersFor } from './quality.js';
 import { buildReport, reportBrief, checkSubmission } from './report.js';
 import { Skills, SkillError } from './skills.js';
+import { ruleExposure, suggestRules, ENGINE_HINTS } from './rules.js';
 import { playbookFor } from './knowledge.js';
 import { watchSource } from './dropin.js';
 import { loadConfig, ROOT } from './config.js';
@@ -310,6 +311,19 @@ export function createHub(overrides = {}) {
       }, who);
     }
     return p;
+  });
+
+  // Rules with where each could break (who can change its state), plus starter rules from the code.
+  route('GET', '/api/rules', ({ t, query }) => {
+    const st = t.store.state;
+    const tid = query.get('target');
+    const targets = Object.values(st.items.target).filter((x) => !tid || x.id === tid || x.name.toLowerCase() === tid.toLowerCase());
+    return {
+      rules: Object.values(st.items.rule || {}).filter((r) => targets.some((x) => x.id === r.targetId))
+        .map((r) => ({ ...r, _f: undefined, exposure: ruleExposure(st, r) })),
+      suggested: targets.flatMap((x) => suggestRules(st, x, playbookFor(x).types).map((s) => ({ ...s, targetId: x.id, target: x.name }))),
+      engines: ENGINE_HINTS,
+    };
   });
 
   route('GET', '/api/suggestions', ({ t, query }) => suggest(t.store.state, { limit: Number(query.get('limit')) || 12 }));

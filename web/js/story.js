@@ -120,6 +120,22 @@ export function storyFor(it) {
     }
     case 'relation':
       return { lines: [p(b(nameOf(it.from)), ` ${REL_WORDS[it.type] || 'connects to'} `, b(nameOf(it.to)), it.label ? ` (${it.label})` : '', '.')], status: 'A connection on the architecture map.', tone: 'muted' };
+    case 'rule': {
+      const status = {
+        untested: ['Nobody has tried to break it yet.', 'warn'],
+        holds: [`Not broken by ${it.engine}${it.runs ? ` (${it.runs})` : ''}. That means not broken within those bounds, not proven.`, 'ok'],
+        broken: [`Broken by ${it.engine}. It is now a suspected bug.`, 'bad'],
+        inconclusive: ['Tried, but nothing settled it either way.', 'muted'],
+      }[it.status];
+      return {
+        lines: [
+          p('A rule it must never break: ', b(it.text)),
+          it.state?.length ? p('It is about: ', it.state.join(', '), '. Open the System map (3) and pick it under Rules to see every part that can change that.') : p('Nobody has said which state it is about yet.'),
+          it.counterexample ? p('What breaks it: ', it.counterexample) : null,
+        ],
+        status: status[0], tone: status[1],
+      };
+    }
     case 'lead':
       return {
         lines: [

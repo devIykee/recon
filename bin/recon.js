@@ -61,6 +61,9 @@ write (as the human, or as an agent with --as NAME)
   recon wait [--timeout 100]            agents: listen for the human instead of stopping; wakes when they write
   recon say <text> [--reply <steerId>]  agents: tell the human something on the board
   recon dismiss <sg_id> <reason>        clear a suggestion that does not apply here
+  recon rules [target]                  the rules, who can change each one's state, and starter rules
+  recon add rule "<text>" --state a,b [--category c] [--formal "..."]
+  recon rule <id> holds|broken|inconclusive --engine E --runs "..." [--counterexample "..."]
   recon propose <text> [--option "A" --option "B"] [--rationale ...]
       any add takes --evidence "ref" or --evidence "ref|what it shows" (repeatable)
   recon coverage <component> <untouched|scanning|reviewed|flagged> [--reasoning ...] [--evidence ...]
@@ -365,6 +368,13 @@ async function add() {
         bugClass: flags.class, confidence: flags.confidence, exploitStage: flags.stage, trigger: flags.trigger,
       };
       break;
+    case 'rule':
+      fields = {
+        text: need(text, 'the rule, in plain words'), category: flags.category, formal: flags.formal,
+        state: flags.state ? String(flags.state).split(',').map((x) => x.trim()).filter(Boolean) : [],
+        targetId: await ref(flags.target, 'target') || await onlyTarget(api),
+      };
+      break;
     case 'lead':
       fields = {
         text: need(text, 'what is left to do'), why: flags.why, value: flags.value || 'med', state: flags.blocked ? 'blocked' : 'open',
@@ -390,7 +400,7 @@ async function add() {
       };
       break;
     default:
-      throw new ReconError(2, `cannot add "${kind}". add target, component, actor, external, assumption, hypothesis, finding, lead or chain`);
+      throw new ReconError(2, `cannot add "${kind}". add target, component, actor, external, assumption, hypothesis, finding, rule, lead or chain`);
   }
   if (fields.componentId && !fields.targetId && kind !== 'component') fields.targetId = (await api.resolve(fields.componentId, 'component')).item.targetId;
   const it = await api.create(kind, clean({ ...base, ...fields }));
@@ -689,6 +699,26 @@ async function update() {
   await runUpdate({ from: typeof flags.from === 'string' ? flags.from : null, check: Boolean(flags.check), url: flags.url || process.env.RECON_URL || undefined, key: flags.key ?? process.env.RECON_KEY });
 }
 
+async function rules() {
+  const r = await client().rules(typeof flags.target === 'string' ? flags.target : pos[0]);
+  const lvl = { open: COLORS.flagged('anyone can change its state'), guarded: 'only a role can change its state', internal: dim('internal writers only'), untouched: dim('nothing writes its state'), unscoped: dim('no state given'), unmapped: dim('not mapped: run recon scan') };
+  out(r, () => [
+    bold(`rules (${r.rules.length})`),
+    ...r.rules.map((x) => `  ${dim(x.id)} ${tint(x.status)} ${x.text}\n      ${lvl[x.exposure.level]}${x.exposure.writers.length ? dim(`: ${x.exposure.writers.slice(0, 4).map((w) => `${w.component}.${w.fn} (${w.access})`).join(', ')}`) : ''}`),
+    ...(r.suggested.length ? ['', bold('suggested from the code'), ...r.suggested.slice(0, 8).map((x) => `  ${dim(x.category.padEnd(12))} ${x.text}${x.state.length ? dim(`  state: ${x.state.join(', ')}`) : ''}`),
+      dim('  add one: recon add rule "<text>" --state a,b --category conservation')] : []),
+  ].join('\n'));
+}
+
+async function ruleResult() {
+  const api = client();
+  const { item } = await api.resolve(need(pos[0], 'rule id or text'), 'rule');
+  const fields = { status: need(pos[1], 'status (holds|broken|inconclusive)') };
+  for (const [flag, key] of [['engine', 'engine'], ['runs', 'runs'], ['counterexample', 'counterexample'], ['formal', 'formal']]) if (typeof flags[flag] === 'string') fields[key] = flags[flag];
+  const r = await api.update('rule', item.id, fields);
+  out(r, () => `rule ${r.id}: ${r.status}${r.hypothesisId ? `, filed as suspected bug ${r.hypothesisId}` : ''}`);
+}
+
 async function dismiss() {
   const r = await client().dismiss(need(pos[0], 'suggestion id (sg_...)'), need(pos.slice(1).join(' '), 'reason'));
   out(r, () => (r.already ? 'already dismissed' : `dismissed "${r.dismissed.title}"`));
@@ -797,7 +827,7 @@ const COMMANDS = {
   steers, ack: () => steerVerb('ack'), address: () => steerVerb('address'), steer,
   verify: () => verdict('verified'), dispute: () => verdict('disputed'), unverify: () => verdict('unverified'),
   accept: () => decide('accept'), decline: () => decide('decline'),
-  setup, agent: agentCmd, start, scan, relate, phase, ready, report, skills, wait, say, dismiss, update, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
+  setup, agent: agentCmd, start, scan, relate, phase, ready, report, skills, wait, say, dismiss, update, rules, rule: ruleResult, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
 };
 
 async function main() {

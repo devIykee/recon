@@ -473,8 +473,8 @@ export function createBoards(root) {
     render,
     open(id) {
       const it = byId(id);
-      if (current === 'architecture' && it && (it.kind === 'component' || it.kind === 'relation' || it.kind === 'assumption')) {
-        if (it.kind === 'component') { arch.pick(it.targetId, id); return; }
+      if (current === 'architecture' && it && (it.kind === 'component' || it.kind === 'relation' || it.kind === 'assumption' || it.kind === 'rule')) {
+        if (it.kind === 'component' || it.kind === 'rule') { arch.pick(it.targetId, id); return; }
       }
       openId = id;
       render();

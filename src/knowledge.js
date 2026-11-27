@@ -800,6 +800,18 @@ export function suggest(state, { limit = 10 } = {}) {
     });
   }
 
+  // rules nobody has tried to break, the ones a stranger can reach first
+  for (const r of Object.values(items.rule || {})) {
+    if (r.status !== 'untested') continue;
+    const x = ruleExposureLite(state, r);
+    push({
+      id: sid('rule', r.id), rule: 'untested-rule', action: 'verify', itemId: r.id, itemKind: 'rule',
+      score: x === 'open' ? 62 : x === 'guarded' ? 48 : 38,
+      title: `Try to break: ${short(r.text)}`,
+      why: x === 'open' ? 'Anyone can change the state this rule depends on. An invariant test or symbolic run would settle it.' : 'Nobody has run an engine against this rule yet.',
+    });
+  }
+
   // findings without repro
   for (const f of Object.values(items.finding)) {
     if (!['recon', 'testing'].includes(f.stage) || f.repro) continue;
@@ -834,6 +846,17 @@ export function suggest(state, { limit = 10 } = {}) {
   }
 
   return out.sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
+// exposure without importing rules.js (it imports nothing from here, but keep the layers simple)
+function ruleExposureLite(state, rule) {
+  const want = (rule.state || []).map((s) => String(s).toLowerCase());
+  if (!want.length) return 'unscoped';
+  for (const c of Object.values(state.items.component)) {
+    if (rule.targetId && c.targetId !== rule.targetId) continue;
+    for (const f of c.surface || []) if (f.access === 'anyone' && (f.writes || []).some((v) => want.some((s) => v.toLowerCase().includes(s) || s.includes(v.toLowerCase())))) return 'open';
+  }
+  return 'guarded';
 }
 
 function short(s, n = 70) {

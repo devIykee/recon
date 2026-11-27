@@ -26,6 +26,9 @@ export const ENUMS = Object.freeze({
   steerState: ['open', 'acknowledged', 'addressed'],
   proposalState: ['pending', 'accepted', 'declined'],
   leadState: ['open', 'blocked', 'done', 'dropped'],
+  ruleCategory: ['conservation', 'solvency', 'accounting', 'bound', 'access', 'ordering', 'other'],
+  ruleStatus: ['untested', 'holds', 'broken', 'inconclusive'],
+  ruleEngine: ['foundry-invariant', 'foundry-fuzz', 'halmos', 'hevm', 'echidna', 'medusa', 'certora', 'kontrol', 'manual'],
   value: ['high', 'med', 'low'],
   verification: ['unverified', 'verified', 'disputed'],
   priority: ['low', 'normal', 'high', 'urgent'],
@@ -43,7 +46,7 @@ export const ENUMS = Object.freeze({
 });
 
 export const KINDS = Object.freeze([
-  'agent', 'target', 'component', 'relation', 'assumption', 'hypothesis', 'finding', 'chain', 'steer', 'proposal', 'lead', 'message',
+  'agent', 'target', 'component', 'relation', 'assumption', 'hypothesis', 'finding', 'chain', 'steer', 'proposal', 'lead', 'message', 'rule',
 ]);
 
 // Component types that describe the system but are not attack surface to review.
@@ -114,6 +117,8 @@ export const SCHEMA = {
     owner: str(),
     checklist: { type: 'object', owner: A, default: {}, merge: 'byKey' },
     notes: str(),
+    // from the scanner: each function, who may call it, and the state it writes and reads
+    surface: arr(),
   },
   relation: {
     targetId: str(A, { required: true, ref: 'target' }),
@@ -210,6 +215,20 @@ export const SCHEMA = {
     itemId: str(),
     replyTo: str(),
   },
+  // A rule the protocol must never break ("nobody withdraws more than they put in"),
+  // the state it is about, and what happened when an engine tried to break it.
+  rule: {
+    text: str(A, { required: true }),
+    targetId: str(A, { ref: 'target' }),
+    category: en('ruleCategory', A, 'conservation'),
+    state: arr(),
+    formal: str(),
+    engine: en('ruleEngine', A),
+    status: en('ruleStatus', A, 'untested'),
+    runs: str(),
+    counterexample: str(),
+    hypothesisId: str(A, { ref: 'hypothesis' }),
+  },
   // An open thread: work worth doing that is not done yet, so nothing is forgotten.
   lead: {
     text: str(A, { required: true }),
@@ -228,7 +247,7 @@ export const SCHEMA = {
 // The field that names an item in the ui and in activity summaries.
 export const TITLE_FIELD = {
   agent: 'name', target: 'name', component: 'name', relation: 'label', assumption: 'text',
-  hypothesis: 'text', finding: 'title', chain: 'title', steer: 'note', proposal: 'text', lead: 'text', message: 'text',
+  hypothesis: 'text', finding: 'title', chain: 'title', steer: 'note', proposal: 'text', lead: 'text', message: 'text', rule: 'text',
 };
 
 // Fields whose change reads as "moved" in the activity feed.
@@ -370,7 +389,7 @@ export function slug(text) {
 
 const PREFIX = {
   agent: 'ag', target: 'tg', component: 'cp', relation: 'rl', assumption: 'as', hypothesis: 'hy',
-  finding: 'fd', chain: 'ch', steer: 'st', proposal: 'pr', lead: 'ld', message: 'ms',
+  finding: 'fd', chain: 'ch', steer: 'st', proposal: 'pr', lead: 'ld', message: 'ms', rule: 'ru',
 };
 
 let idSeq = 0;
