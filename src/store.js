@@ -45,6 +45,24 @@ export class Store extends EventEmitter {
     this.lastAt = 0;
     this._saveTimer = null;
     this.loaded = false;
+    this.rev = 0; // bumps on every change; snapshots use it to skip idle periods
+  }
+
+  // Point the store at another engagement file (saving the current one first).
+  switchTo(file, { fresh = false, save = true } = {}) {
+    if (this.file && save) this.flush();
+    clearTimeout(this._saveTimer);
+    this.file = file;
+    this.rev++;
+    if (fresh || !file) { this.state = emptyState(); this.loaded = false; return false; }
+    const ok = this.load();
+    if (!ok) this.state = emptyState();
+    return ok;
+  }
+
+  serialize() {
+    const body = JSON.stringify(this.state, null, 1);
+    return this.key ? encrypt(body, this.key) : body;
   }
 
   // ---------- persistence ----------
@@ -72,8 +90,7 @@ export class Store extends EventEmitter {
     this._saveTimer = null;
     if (!this.file) return;
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    const body = JSON.stringify(this.state, null, 1);
-    const data = this.key ? encrypt(body, this.key) : body;
+    const data = this.serialize();
     const tmp = `${this.file}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, data, { mode: 0o600 });
     fs.renameSync(tmp, this.file);
@@ -281,6 +298,7 @@ export class Store extends EventEmitter {
   }
 
   emitChange(op, kind, item, activity) {
+    this.rev++;
     this.emit('change', { op, kind, item, activity });
   }
 
@@ -405,6 +423,7 @@ export class Store extends EventEmitter {
 
   replace(doc, author = 'human') {
     this.state = normalizeState(doc);
+    this.rev++;
     this.log({ by: author, action: 'imported', kind: 'project', summary: `loaded project "${this.state.project.name}"` });
     this.emit('reset', this.state);
     this.save();
@@ -415,6 +434,7 @@ export class Store extends EventEmitter {
     if (typeof fields.name === 'string' && fields.name.trim()) p.name = fields.name.trim().slice(0, 120);
     if (typeof fields.example === 'boolean') p.example = fields.example;
     if (Array.isArray(fields.dismissed)) p.dismissed = fields.dismissed.slice(-500);
+    this.rev++;
     this.emit('project', p);
     this.save();
     void author;

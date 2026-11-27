@@ -57,7 +57,12 @@ move data
   recon push <file.json>                merge a json document into the board
   recon export [file.json]              the whole project (stdout if no file)
   recon import <file.json>              replace the project with an export
-  recon start <name>                    replace the example with a real engagement (agents may do this)
+  recon start <name>                    start or resume an engagement by name (agents may do this)
+  recon sessions                        every engagement on this machine, kept until you remove it
+  recon open <name|id>                  switch the board to another engagement
+  recon new [name] [--example]          start a new engagement (the current one is saved)
+  recon snapshots [id] · recon snapshot · recon restore <snapshot>
+                                        hourly snapshots while things change; keep 48h, then one a day
   recon reset [--example] [--name N]    start over (empty, or the example)
 
 global
@@ -522,6 +527,47 @@ async function start() {
   out(r, () => (r.existing ? `already working on "${r.project.name}"` : `started "${r.project.name}". add the target next: recon add target "<name>" --type <protocol type>`));
 }
 
+async function sessions() {
+  const r = await client().engagements();
+  out(r, () => r.engagements.map((e) => `${e.id === r.current ? COLORS.reviewed('●') : ' '} ${dim(e.id.padEnd(22))} ${bold(e.name)}${e.example ? dim(' (example)') : ''}${e.archived ? dim(' (archived)') : ''}  ${dim(`${e.stats?.targets ?? 0} targets · ${e.stats?.findings ?? 0} findings · ${ago(e.updatedAt)}`)}`).join('\n'));
+}
+
+async function openCmd() {
+  const api = client();
+  const ref = need(pos.join(' '), 'engagement name or id');
+  const r = await api.engagements();
+  const e = r.engagements.find((x) => x.id === ref) || r.engagements.find((x) => x.name.toLowerCase() === ref.toLowerCase())
+    || r.engagements.filter((x) => x.name.toLowerCase().includes(ref.toLowerCase()))[0];
+  if (!e) throw new ReconError(404, `no engagement "${ref}". see: recon sessions`);
+  await api.openEngagement(e.id);
+  out(e, () => `opened "${e.name}"`);
+}
+
+async function newCmd() {
+  const r = await client().newEngagement(pos.join(' ') || undefined, flags.example ? 'example' : 'empty');
+  out(r, () => `started a new engagement. the previous one is saved: recon sessions`);
+}
+
+async function snapshotsCmd() {
+  const api = client();
+  const id = pos[0] || (await api.engagements()).current;
+  const xs = await api.snapshots(id);
+  out(xs, () => (xs.length ? xs.map((x) => `${dim(x.id)}  ${new Date(x.at).toLocaleString()}`).join('\n') : dim('no snapshots yet (taken hourly while there are changes)')));
+}
+
+async function snapshotCmd() {
+  const api = client();
+  const r = await api.snapshot((await api.engagements()).current);
+  out(r, () => `snapshot ${r.snapshot}`);
+}
+
+async function restoreCmd() {
+  const api = client();
+  const id = flags.engagement || (await api.engagements()).current;
+  await api.restore(id, need(pos[0], 'snapshot id (see: recon snapshots)'));
+  process.stderr.write('restored. the state before the restore was snapshotted too.\n');
+}
+
 async function model() {
   out(await client().model(), (m) => Object.entries(m.kinds).map(([k, fields]) => `${bold(k)}\n${Object.entries(fields).map(([f, s]) => `  ${f.padEnd(14)} ${s.type}${s.enum ? ` ${dim(s.enum.join(' | '))}` : ''}${s.required ? ' required' : ''}${s.owner === 'human-only' ? ` ${COLORS.flagged('human only')}` : ''}`).join('\n')}`).join('\n\n'));
 }
@@ -535,7 +581,7 @@ const COMMANDS = {
   steers, ack: () => steerVerb('ack'), address: () => steerVerb('address'), steer,
   verify: () => verdict('verified'), dispute: () => verdict('disputed'), unverify: () => verdict('unverified'),
   accept: () => decide('accept'), decline: () => decide('decline'),
-  setup, agent: agentCmd, start, relate, phase, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
+  setup, agent: agentCmd, start, relate, phase, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
 };
 
 async function main() {

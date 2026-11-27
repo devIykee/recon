@@ -11,11 +11,11 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { Store, agentIdFor, label } from './store.js';
 import { WsServer } from './ws.js';
-import { seedExample, seedEmpty } from './seed.js';
 import { suggest, briefing, playbook, allPlaybooks, GLOSSARY, checklistFor, CLASSES } from './knowledge.js';
 import { describeModel, isKind, ENUMS, KINDS } from './model.js';
 import { healthAll } from './health.js';
 import { DemoAgent } from './demo.js';
+import { Engagements } from './engagements.js';
 import { watchSource } from './dropin.js';
 import { loadConfig, ROOT } from './config.js';
 import { createClient } from './client.js';
@@ -39,16 +39,11 @@ class Tenant {
     this.id = id;
     this.cfg = cfg;
     const dir = cfg.mode === 'multi' ? path.join(cfg.dataDir, 'tenants', id) : cfg.dataDir;
-    this.store = new Store({ file: path.join(dir, 'state.json'), encryptionKey: cfg.encryptionKey });
-    let loaded = false;
-    try { loaded = this.store.load(); } catch (err) {
-      cfg.log(`recon: could not read ${this.store.file}: ${err.message}`);
+    this.store = new Store({ encryptionKey: cfg.encryptionKey });
+    this.engagements = new Engagements(dir, this.store, { seed: cfg.mode === 'multi' ? 'empty' : cfg.seed, log: cfg.log });
+    try { this.engagements.init(); } catch (err) {
+      cfg.log(`recon: could not open the engagements in ${dir}: ${err.message}`);
       throw err;
-    }
-    if (!loaded) {
-      if (cfg.seed === 'empty' || cfg.mode === 'multi') seedEmpty(this.store);
-      else seedExample(this.store);
-      this.store.flush();
     }
     this.demo = new DemoAgent(this.store, { log: cfg.log });
     this.watchers = [];
@@ -67,6 +62,7 @@ class Tenant {
     this.demo.stop();
     for (const w of this.watchers) w.close();
     this.store.flush();
+    this.engagements.close();
   }
 }
 
@@ -293,34 +289,73 @@ export function createHub(overrides = {}) {
   route('POST', '/api/merge', ({ t, body, who }) => t.store.merge(body, who));
   route('GET', '/api/export', ({ t }) => ({ recon: VERSION, exportedAt: Date.now(), ...t.store.state }));
 
+  // Importing adds a new engagement; it never replaces the one you are in.
   route('POST', '/api/import', ({ t, body, who }) => {
-    if (who !== 'human') throw new HttpError(403, 'only a human replaces the project');
+    if (who !== 'human') throw new HttpError(403, 'only a human imports engagements');
     const doc = body?.state || body;
     if (!doc?.items) throw new HttpError(400, 'expected an exported recon project (with "items")');
-    t.store.replace(doc, who);
-    return { ok: true };
-  });
-
-  // Anyone, agents included, may replace the example with a real engagement. A real one is never wiped this way.
-  route('POST', '/api/start', ({ t, body, who }) => {
-    const name = String(body?.name || '').trim().slice(0, 120);
-    if (!name) throw new HttpError(400, 'give the engagement a name');
-    if (!t.store.state.project.example) {
-      if (t.store.state.project.name === name) return { ok: true, project: t.store.state.project, existing: true };
-      throw new HttpError(409, `a real engagement ("${t.store.state.project.name}") is already on the board. add targets to it instead.`);
-    }
-    seedEmpty(t.store, name);
-    t.store.log({ by: who, action: 'note', kind: 'project', summary: `started the engagement "${name}"` });
-    t.store.flush();
+    t.engagements.create({ doc });
     return { ok: true, project: t.store.state.project };
   });
 
+  // Start (or resume) an engagement by name. Agents may do this. Nothing is ever
+  // overwritten: the previous engagement stays saved and listed.
+  route('POST', '/api/start', ({ t, body, who }) => {
+    const name = String(body?.name || '').trim().slice(0, 120);
+    if (!name) throw new HttpError(400, 'give the engagement a name');
+    const p = t.store.state.project;
+    if (!p.example && p.name.toLowerCase() === name.toLowerCase()) return { ok: true, project: p, existing: true };
+    const found = t.engagements.findByName(name);
+    if (found && !found.example) {
+      t.engagements.open(found.id);
+      return { ok: true, project: t.store.state.project, resumed: true };
+    }
+    t.engagements.create({ name, mode: 'empty' });
+    t.store.log({ by: who, action: 'note', kind: 'project', summary: `started the engagement "${name}"` });
+    return { ok: true, project: t.store.state.project };
+  });
+
+  route('GET', '/api/engagements', ({ t }) => t.engagements.list());
+
+  route('POST', '/api/engagements', ({ t, body, who }) => {
+    if (who !== 'human') throw new HttpError(403, 'agents start engagements with POST /api/start');
+    t.engagements.create({ name: body?.name, mode: body?.mode === 'example' ? 'example' : 'empty' });
+    return t.engagements.list();
+  });
+
+  route('POST', '/api/engagements/:id/open', ({ t, params }) => {
+    t.engagements.open(params.id);
+    return t.engagements.list();
+  });
+
+  route('PATCH', '/api/engagements/:id', ({ t, params, body, who }) => {
+    if (who !== 'human') throw new HttpError(403, 'only a human renames or archives engagements');
+    return t.engagements.update(params.id, body || {});
+  });
+
+  route('DELETE', '/api/engagements/:id', ({ t, params, who }) => {
+    if (who !== 'human') throw new HttpError(403, 'only a human removes engagements');
+    try { return t.engagements.remove(params.id); } catch (err) { throw new HttpError(err.status || 409, err.message); }
+  });
+
+  route('GET', '/api/engagements/:id/snapshots', ({ t, params }) => t.engagements.snapshots(params.id));
+
+  route('POST', '/api/engagements/:id/snapshots', ({ t, params, who }) => {
+    if (who !== 'human') throw new HttpError(403, 'only a human takes manual snapshots');
+    if (params.id !== t.store.state.project.id) throw new HttpError(409, 'open the engagement first');
+    return { snapshot: t.engagements.snapshot({ force: true }) };
+  });
+
+  route('POST', '/api/engagements/:id/restore', ({ t, params, body, who }) => {
+    if (who !== 'human') throw new HttpError(403, 'only a human restores snapshots');
+    return t.engagements.restore(params.id, body?.snapshot);
+  });
+
+  // Kept for older clients: starts a new engagement (empty or the example). Nothing is deleted.
   route('POST', '/api/reset', ({ t, body, who }) => {
-    if (who !== 'human') throw new HttpError(403, 'only a human resets the project');
-    if (body?.mode === 'example') seedExample(t.store);
-    else seedEmpty(t.store, body?.name || 'New engagement');
-    t.store.flush();
-    return { ok: true };
+    if (who !== 'human') throw new HttpError(403, 'only a human starts a new engagement this way');
+    t.engagements.create({ name: body?.name, mode: body?.mode === 'example' ? 'example' : 'empty' });
+    return { ok: true, project: t.store.state.project };
   });
 
   // ---------- payloads ----------
@@ -334,6 +369,7 @@ export function createHub(overrides = {}) {
       health: healthAll(s),
       suggestions: suggest(s, { limit: 12 }),
       demo: { running: t.demo.running },
+      engagements: t.engagements.list(),
       server: { version: VERSION, mode: cfg.mode, now: Date.now() },
     };
   }
@@ -489,6 +525,7 @@ export function createHub(overrides = {}) {
     }
     for (const c of ws.clients) { if (!c.alive) c.terminate(); else c.ping(); }
     for (const [id, sess] of mcpSessions) if (Date.now() - sess.at > 24 * 3600_000) mcpSessions.delete(id);
+    for (const t of tenants.values()) { try { t.engagements.maybeSnapshot(); } catch (err) { log(`recon: snapshot failed: ${err.message}`); } }
   }, 5000);
   healthTimer.unref();
 

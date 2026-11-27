@@ -73,14 +73,22 @@ test('agent works the board through tools, by name', async () => {
   assert.equal(agent.focusItem, cov.data.id);
 });
 
-test('agents may replace the example, never a real engagement', async () => {
+test('starting an engagement never deletes one, and starting by name resumes it', async () => {
+  const eng = hub.tenant().engagements;
+  const exampleId = hub.tenant().store.state.project.id;
   const r = await rpc.tool('recon_start_engagement', { name: 'Real audit' });
   assert.equal(r.isError, false);
-  assert.equal(hub.tenant().store.state.project.example, false);
-  const again = await rpc.tool('recon_start_engagement', { name: 'Another audit' });
-  assert.equal(again.isError, true);
-  assert.match(again.text, /already on the board/);
-  await fetch(`http://127.0.0.1:${hub.port}/api/reset`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'example' }) });
+  assert.equal(hub.tenant().store.state.project.name, 'Real audit');
+  const realId = hub.tenant().store.state.project.id;
+  await rpc.tool('recon_start_engagement', { name: 'Another audit' });
+  assert.equal(hub.tenant().store.state.project.name, 'Another audit');
+  const again = await rpc.tool('recon_start_engagement', { name: 'real audit' });
+  assert.equal(again.data.resumed, true);
+  assert.equal(hub.tenant().store.state.project.id, realId);
+  const ids = eng.list().engagements.map((e) => e.id);
+  assert.ok(ids.includes(exampleId) && ids.includes(realId));
+  eng.open(exampleId);
+  assert.equal(hub.tenant().store.state.project.example, true);
 });
 
 test('recon_map builds the architecture by name and is idempotent', async () => {
