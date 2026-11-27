@@ -410,7 +410,7 @@ function slug(s) {
 
 // ---------- navigation ----------
 
-const BOARD_FOR = { chain: 'findings', relation: 'architecture', component: 'coverage', assumption: 'assumptions', hypothesis: 'hypotheses', finding: 'findings', agent: 'agents', target: 'coverage' };
+const BOARD_FOR = { chain: 'findings', rule: 'architecture', relation: 'architecture', component: 'coverage', assumption: 'assumptions', hypothesis: 'hypotheses', finding: 'findings', agent: 'agents', target: 'coverage' };
 
 function open(id) {
   const item = byId(id);
@@ -420,7 +420,7 @@ function open(id) {
   if (item.kind === 'lead') { setSidebar(true); sidebar.select('threads'); return; }
   if (item.kind === 'message') { setSidebar(true); sidebar.select('talk'); return; }
   if (view === 'map' && map.has(id)) { map.expand(id); return; }
-  if (view === 'architecture' && ['component', 'relation', 'assumption'].includes(item.kind)) { boards.open(id); return; }
+  if (view === 'architecture' && ['component', 'relation', 'assumption', 'rule'].includes(item.kind)) { boards.open(id); return; }
   const board = BOARD_FOR[item.kind];
   if (item.kind === 'target' && view === 'map') { map.expand(id); return; }
   if (view !== board) setView(board);

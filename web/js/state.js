@@ -150,7 +150,7 @@ function handle(msg) {
 }
 
 function normalize(s) {
-  for (const k of ['agent', 'target', 'component', 'relation', 'assumption', 'hypothesis', 'finding', 'chain', 'steer', 'proposal', 'lead', 'message']) {
+  for (const k of ['agent', 'target', 'component', 'relation', 'assumption', 'hypothesis', 'finding', 'chain', 'steer', 'proposal', 'lead', 'message', 'rule']) {
     s.items[k] = s.items[k] || {};
   }
   s.activity = s.activity || [];

@@ -4,7 +4,7 @@
 // you can read what it calls and what reaches it at a glance.
 
 import { h, icon, setChildren, toast, hash, truncate } from './ui.js';
-import { list, byId } from './state.js';
+import { list, byId, get, write } from './state.js';
 import { RELATION, COMPONENT_TYPE, REVIEW } from './labels.js';
 import { arrow, rect, svgEl } from './sketch.js';
 import { openSteerComposer } from './steer.js';
@@ -30,6 +30,10 @@ export function createSystemMap() {
   let picked = null;
   let query = '';
   let showAssumptions = false;
+  let showRules = false;
+  let activeRule = null; // the rule lens: what can change the state this rule is about
+  let ruleData = null;
+  let ruleSig = '';
   const hidden = new Set();
   const cam = { x: 0, y: 0, z: 1 };
   const fitted = new Set();
@@ -107,7 +111,8 @@ export function createSystemMap() {
       phaseStepper(t, { compact: true }));
     if (!parts.search.isConnected) el.querySelector('.sm-tools').prepend(parts.search);
     setChildren(el.querySelector('.sm-tools'), parts.search,
-      h(`button.btn${showAssumptions ? '.on' : ''}`, { 'aria-pressed': String(showAssumptions), on: { click: () => { showAssumptions = !showAssumptions; if (showAssumptions) picked = null; draw(true); } } }, icon('sticky'), 'Developers\' assumptions'),
+      h(`button.btn${showRules ? '.on' : ''}`, { 'aria-pressed': String(showRules), on: { click: () => { showRules = !showRules; if (showRules) { picked = null; showAssumptions = false; } else activeRule = null; refreshRules(true); } } }, icon('shield'), `Rules${list('rule', (r) => r.targetId === t.id).length ? ` · ${list('rule', (r) => r.targetId === t.id).length}` : ''}`),
+      h(`button.btn${showAssumptions ? '.on' : ''}`, { 'aria-pressed': String(showAssumptions), on: { click: () => { showAssumptions = !showAssumptions; if (showAssumptions) { picked = null; showRules = false; activeRule = null; } draw(true); } } }, icon('sticky'), 'Developers\' assumptions'),
       h('button.btn', { on: { click: () => addRelation(t) } }, icon('link'), 'Add connection'),
       h('button.btn.btn-primary', { on: { click: () => bus.newItem('component', { targetId: t.id }) } }, icon('plus'), 'Add part'));
 
@@ -134,7 +139,36 @@ export function createSystemMap() {
         h('div.gap-acts',
           h('button.btn.btn-sm.btn-primary', { on: { click: (e) => openSteerComposer(e.currentTarget, { item: t, action: 'cover', to: ['all'], text: `Map how these connect to the rest of ${t.name} (run recon scan on the source first, then recon map for what it cannot see): ${loose.map((c) => c.name).join(', ')}` }) } }, icon('send'), 'Ask an agent to map these'))));
     }
+    if (showRules || activeRule) refreshRules(false);
     draw(false);
+  }
+
+  // ---------- rules: the lens ----------
+
+  async function refreshRules(force) {
+    const sig = `${targetId}|${list('rule', (r) => r.targetId === targetId).map((r) => `${r.id}:${r.updatedAt}`).join()}|${list('component', (c) => c.targetId === targetId).map((c) => c.updatedAt).join()}`;
+    if (!force && sig === ruleSig) return;
+    ruleSig = sig;
+    try { ruleData = await get(`/api/rules?target=${encodeURIComponent(targetId)}`); } catch (err) { toast(err.message, 'error'); }
+    sideSig = '';
+    draw(true);
+  }
+
+  // parts that can change the active rule's state, with who can reach them
+  function lensWriters() {
+    if (!activeRule || !ruleData) return null;
+    const r = ruleData.rules.find((x) => x.id === activeRule);
+    if (!r) return null;
+    const out = new Map();
+    for (const w of r.exposure.writers) {
+      const level = w.access === 'anyone' ? 'open' : w.access.startsWith('role:') ? 'role' : 'internal';
+      const fnPart = list('component', (c) => c.targetId === targetId && c.name === `${w.component}.${w.fn}`)[0];
+      for (const id of [w.componentId, fnPart?.id].filter(Boolean)) {
+        const cur = out.get(id);
+        if (!cur || (level === 'open' && cur !== 'open')) out.set(id, level);
+      }
+    }
+    return { rule: r, parts: out };
   }
 
   // ---------- drawing ----------
@@ -144,7 +178,7 @@ export function createSystemMap() {
     if (!el || !targetId) return;
     const comps = list('component', (c) => c.targetId === targetId);
     const rels = list('relation', (r) => r.targetId === targetId);
-    const sig = `${targetId}|${comps.map((c) => `${c.id}:${c.updatedAt}`).join()}|${rels.map((r) => `${r.id}:${r.updatedAt}`).join()}|${[...hidden].join()}|${picked}|${query}|${showAssumptions}|${document.documentElement.dataset.theme}`;
+    const sig = `${targetId}|${comps.map((c) => `${c.id}:${c.updatedAt}`).join()}|${rels.map((r) => `${r.id}:${r.updatedAt}`).join()}|${[...hidden].join()}|${picked}|${query}|${showAssumptions}|${showRules}|${activeRule}|${ruleSig}|${document.documentElement.dataset.theme}`;
     if (!force && sig === lastSig) { renderSide(comps, rels); return; }
     lastSig = sig;
     const { world } = parts;
@@ -161,7 +195,8 @@ export function createSystemMap() {
     const near = new Set(focus ? [focus, ...edges.filter((e) => e.from === focus || e.to === focus).flatMap((e) => [e.from, e.to])] : []);
     const matches = query ? new Set(comps.filter((c) => c.name.toLowerCase().includes(query) || (c.summary || '').toLowerCase().includes(query)).map((c) => c.id)) : null;
 
-    const canvas = h(`div.sm-canvas${focus ? '.focusing' : ''}${matches ? '.searching' : ''}`, { style: { width: `${W}px`, height: `${size.H}px` } });
+    const lens = lensWriters();
+    const canvas = h(`div.sm-canvas${focus ? '.focusing' : ''}${matches ? '.searching' : ''}${lens && !focus ? '.lensing' : ''}`, { style: { width: `${W}px`, height: `${size.H}px` } });
 
     // column headings: who uses it, the code, what it depends on
     const cols = new Map();
@@ -239,6 +274,7 @@ export function createSystemMap() {
           focus && near.has(c.id) ? 'near' : '',
           matches && matches.has(c.id) ? 'match' : '',
           !linked(c.id, rels) ? 'loose' : '',
+          lens && lens.parts.has(c.id) ? `writer w-${lens.parts.get(c.id)}` : '',
         ].filter(Boolean).join(' '),
         title: `${c.name}${c.summary ? `\n${c.summary}` : ''}`,
         on: {
@@ -250,10 +286,11 @@ export function createSystemMap() {
       node.addEventListener('pointerleave', () => { if (!picked) hoverOn(canvas, c.id, false); });
       const sk = svgEl('svg', { class: 'sketch', viewBox: `0 0 ${p.w} ${p.h}`, width: p.w, height: p.h });
       sk.append(svgEl('path', { d: rect(p.w, p.h, { seed: hash(c.id), rough: 1 }) }));
-      node.append(sk,
+      node.append(...[sk,
+        lens && lens.parts.has(c.id) ? h('span.sm-writes', { 'data-level': lens.parts.get(c.id) }, lens.parts.get(c.id) === 'open' ? 'anyone can change it' : lens.parts.get(c.id) === 'role' ? 'a role can change it' : 'changes it') : null,
         h('span.sm-top', icon(t.icon), h('span', t.label), ext ? null : h('span.state-dot', { title: REVIEW[c.reviewState].label })),
         h('span.sm-nm', framed.has(c.id) && c.name.includes('.') ? shortName(c) : c.name),
-        h('span.sm-sum', c.summary || (ext ? '' : 'no summary yet')));
+        h('span.sm-sum', c.summary || (ext ? '' : 'no summary yet'))].filter(Boolean));
       canvas.append(node);
     }
     world.replaceChildren(canvas);
@@ -296,8 +333,63 @@ export function createSystemMap() {
     return { rows: rows.slice(0, 12), total: rows.length };
   }
 
+  // Every way from a person to the part that changes the rule's state.
+  function upstream(id, edges) {
+    const inc = new Map();
+    for (const e of edges) { if (!inc.has(e.to)) inc.set(e.to, []); inc.get(e.to).push(e); }
+    const paths = [];
+    const go = (node, path, seen) => {
+      if (paths.length >= 12) return;
+      const steps = (inc.get(node) || []).filter((e) => !seen.has(e.from));
+      if (!steps.length || path.length >= 4) { paths.push(path); return; }
+      for (const e of steps) go(e.from, [e, ...path], new Set([...seen, e.from]));
+    };
+    go(id, [], new Set([id]));
+    return paths;
+  }
+
+  function renderRuleFlow(lens) {
+    const panel = parts.flow;
+    const r = lens.rule;
+    panel.hidden = false;
+    el.classList.add('with-flow');
+    const chip = (id) => {
+      const c = byId(id);
+      return h(`button.flow-node${lens.parts.has(id) ? `.w-${lens.parts.get(id)}` : ''}`, { 'data-type': c?.type || '', on: { click: () => { activeRule = null; picked = id; draw(true); requestAnimationFrame(() => centerOn(id)); } } },
+        c && !isCode(c) ? icon((COMPONENT_TYPE[c.type] || COMPONENT_TYPE.other).icon) : null, c?.name || '?');
+    };
+    // one row per function that writes the state: exactly who may call it, the call, the part, what it writes
+    const actorFor = (name) => list('component', (c) => c.targetId === targetId && c.type === 'actor' && c.name.toLowerCase() === name.toLowerCase())[0];
+    const rows = [];
+    for (const w of r.exposure.writers) {
+      const level = w.access === 'anyone' ? 'open' : w.access.startsWith('role:') ? 'role' : 'internal';
+      const callers = level === 'open' ? ['Anyone'] : level === 'role' ? w.access.slice(5).split('|') : [];
+      const fnPart = list('component', (c) => c.targetId === targetId && c.name === `${w.component}.${w.fn}`)[0];
+      const row = h('div.flow-row');
+      for (const [i, who] of callers.entries()) {
+        const a = actorFor(who);
+        if (i) row.append(h('span.flow-or', 'or'));
+        row.append(a ? chip(a.id) : h(`span.flow-node.w-${level}`, who));
+      }
+      if (!callers.length) row.append(h('span.flow-node', 'its own code'));
+      row.append(h('span.flow-step', { style: { '--c': RELATION.calls.color } }, h('span.v', 'calls'), h('span.l', w.fn), h('span.arrow', '→')),
+        chip(fnPart?.id || w.componentId),
+        h(`span.flow-writes.w-${level}`, `writes ${w.writes.join(', ')}${level === 'open' ? ' · no check on the caller' : level === 'role' ? ` · only ${callers.join(' or ')}` : ''}`),
+        w.location ? h('span.flow-loc', `${w.location.split(':')[0]}:${w.line}`) : null);
+      rows.push(row);
+    }
+    setChildren(panel,
+      h('div.flow-head',
+        h('b', 'Who can break ', h('span.flow-here', `"${truncate(r.text, 60)}"`)),
+        h('span.meta', r.exposure.why),
+        h('button.tool.sm', { 'aria-label': 'Close the lens', on: { click: () => { activeRule = null; draw(true); } } }, icon('x'))),
+      h('div.flow-rows', ...(rows.length ? rows : [h('div.sm-none', r.exposure.why)])));
+  }
+
   function renderFlow() {
     const panel = parts.flow;
+    const lens = !picked && lensWriters();
+    if (lens && last) { renderRuleFlow(lens); return; }
     if (!picked || !last) { panel.hidden = true; el.classList.remove('with-flow'); return; }
     const it = byId(picked);
     const { rows, total } = flowsThrough(picked, last.edges);
@@ -417,7 +509,7 @@ export function createSystemMap() {
     const { side } = parts;
     const it = picked ? byId(picked) : null;
     const t = byId(targetId);
-    el.classList.toggle('with-side', Boolean(it || showAssumptions));
+    el.classList.toggle('with-side', Boolean(it || showAssumptions || showRules));
     if (it) {
       const sig = `p|${it.id}|${it.updatedAt}|${rels.map((r) => r.updatedAt).join()}`;
       if (sig === sideSig) return;
@@ -439,6 +531,13 @@ export function createSystemMap() {
           h('button.btn.btn-sm', { on: { click: () => addRelation(t) } }, icon('link'), 'Add connection')));
       return;
     }
+    if (showRules && t) {
+      const sig = `r|${t.id}|${ruleSig}|${activeRule}|${ruleData ? 1 : 0}`;
+      if (sig === sideSig) return;
+      sideSig = sig;
+      renderRules(t);
+      return;
+    }
     if (showAssumptions && t) {
       const sig = `a|${t.id}|${list('assumption', (a) => a.targetId === t.id).map((a) => a.updatedAt).join()}`;
       if (sig === sideSig) return;
@@ -450,6 +549,39 @@ export function createSystemMap() {
     sideSig = '';
     side.replaceChildren();
     void comps;
+  }
+
+  let draftState = new Set();
+  function renderRules(t) {
+    const { side } = parts;
+    const vars = [...new Set(list('component', (c) => c.targetId === t.id).flatMap((c) => (c.surface || []).flatMap((f) => [...(f.writes || []), ...(f.reads || [])])))].sort();
+    const text = h('textarea.textarea', { rows: 2, placeholder: 'A rule it must never break, e.g. "nobody withdraws more than they deposited"' });
+    const cat = h('select.select', ...['conservation', 'solvency', 'accounting', 'bound', 'access', 'ordering', 'other'].map((c) => h('option', { value: c }, c)));
+    const add = async (fields) => {
+      try { const r = await write.create('rule', { targetId: t.id, ...fields }); activeRule = r.id; draftState = new Set(); refreshRules(true); } catch (err) { toast(err.message, 'error'); }
+    };
+    const statusPill = (r) => h(`span.rule-status.s-${r.status}`, { untested: 'not tried yet', holds: 'holds', broken: 'broken', inconclusive: 'inconclusive' }[r.status]);
+    const rules = ruleData?.rules || [];
+    setChildren(side,
+      h('div.sm-side-head', h('h3', 'Rules'), h('button.tool.sm', { 'aria-label': 'Close', on: { click: () => { showRules = false; activeRule = null; draw(true); } } }, icon('x'))),
+      h('p.rule-lead', 'What this protocol must never break. Click one to see every part that can change the state it depends on; an agent then tries to break it with an invariant test, a fuzzer or a symbolic run.'),
+      h('div.rule-list', ...rules.map((r) => h(`div.rule-card${r.id === activeRule ? '.on' : ''}`, { 'data-level': r.exposure.level, on: { click: (e) => { if (e.target.closest('button')) return; activeRule = activeRule === r.id ? null : r.id; draw(true); } } },
+        h('div.rule-top', statusPill(r), h('span.rule-cat', r.category), h(`span.rule-exp.x-${r.exposure.level}`, { open: 'anyone can touch it', guarded: 'a role can touch it', internal: 'internal only', untouched: 'nothing writes it', unscoped: 'no state yet', unmapped: 'not scanned' }[r.exposure.level])),
+        h('div.rule-text', r.text),
+        r.state?.length ? h('div.rule-state', ...r.state.map((v) => h('code', v))) : null,
+        r.status === 'holds' ? h('div.rule-note', `Not broken by ${r.engine} (${r.runs}).`) : null,
+        r.status === 'broken' ? h('div.rule-note.bad', `Broken by ${r.engine}: ${truncate(r.counterexample || '', 160)}`) : null,
+        r.status === 'untested' ? h('div.rule-acts', h('button.btn.btn-xs', { on: { click: (e) => openSteerComposer(e.currentTarget, { item: r, action: 'verify', to: ['all'], text: `Try to break this rule with an engine (Foundry invariant test, Halmos or Echidna), then record the result with recon_rule_result: "${r.text}"` }) } }, icon('send'), 'Ask an agent to break it')) : null))),
+      rules.length ? null : h('div.sm-none', ruleData ? 'No rules yet. Add one below, or start from a suggestion.' : 'Loading…'),
+      h('div.sm-sec', 'Add a rule'),
+      text,
+      vars.length ? h('div.rule-vars', h('span.help', 'It is about:'), ...vars.map((v) => h(`button.rule-var${draftState.has(v) ? '.on' : ''}`, { type: 'button', on: { click: (e) => { if (draftState.has(v)) draftState.delete(v); else draftState.add(v); e.currentTarget.classList.toggle('on'); } } }, v))) : h('div.help', 'Run recon scan to pick the state it is about from the code.'),
+      h('div.rule-add', cat, h('button.btn.btn-primary.btn-sm', { on: { click: () => { const v = text.value.trim(); if (!v) { toast('Write the rule first.', 'error'); return; } add({ text: v, category: cat.value, state: [...draftState] }); } } }, icon('plus'), 'Add rule')),
+      ruleData?.suggested?.length ? h('div.sm-sec', 'Suggested for this protocol') : null,
+      ...(ruleData?.suggested || []).slice(0, 8).map((x) => h('div.rule-sug',
+        h('div', h('div.rule-text', x.text), x.state.length ? h('div.rule-state', ...x.state.map((v) => h('code', v))) : null),
+        h('button.btn.btn-xs', { on: { click: () => add({ text: x.text, category: x.category, state: x.state }) } }, icon('plus'), 'Add'))),
+    );
   }
 
   // ---------- pan and zoom, local to this page ----------
@@ -558,7 +690,11 @@ export function createSystemMap() {
     render,
     zoomBy,
     release() { if (!picked) return false; picked = null; draw(true); return true; },
-    pick(tid, id) { targetId = tid; picked = id; showAssumptions = false; draw(true); requestAnimationFrame(() => centerOn(id)); },
+    pick(tid, id) {
+      targetId = tid;
+      if (byId(id)?.kind === 'rule') { showRules = true; activeRule = id; picked = null; refreshRules(true); return; }
+      picked = id; showAssumptions = false; draw(true); requestAnimationFrame(() => centerOn(id));
+    },
     fit,
   };
 }

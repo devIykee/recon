@@ -326,6 +326,22 @@ export class Store extends EventEmitter {
         }, author);
       }
     }
+    // A rule an engine broke becomes a suspected bug with the breaking call sequence as its trigger.
+    if (kind === 'rule' && (changed.includes('status') || created) && item.status === 'broken' && !item.hypothesisId) {
+      const writer = Object.values(this.state.items.component).find((c) => c.targetId === item.targetId && (c.surface || []).some((f) => (f.writes || []).some((v) => (item.state || []).some((s) => v.toLowerCase().includes(String(s).toLowerCase()) || String(s).toLowerCase().includes(v.toLowerCase())))));
+      const h = this.create('hypothesis', {
+        text: `Breaks the rule: ${item.text}`,
+        targetId: item.targetId || '',
+        componentId: writer?.id || '',
+        bugClass: item.category === 'access' ? 'access-control' : item.category === 'bound' ? 'bounds' : item.category,
+        confidence: 'high',
+        exploitStage: 'trigger',
+        trigger: item.counterexample,
+        evidence: [{ kind: 'test', ref: item.formal ? item.formal.split('\n')[0].slice(0, 120) : `${item.engine} run`, note: `${item.engine} broke it${item.runs ? ` (${item.runs})` : ''}: ${item.counterexample.slice(0, 300)}` }],
+      }, author, { force: true });
+      item.hypothesisId = h.id;
+      item._f.hypothesisId = { at: this.tick(), by: author };
+    }
     // Promote: confirming a hypothesis keeps the link both ways.
     if (kind === 'finding' && changed.includes('hypothesisId') && item.hypothesisId) {
       const h = this.get('hypothesis', item.hypothesisId);
@@ -414,7 +430,7 @@ export class Store extends EventEmitter {
     const items = docItems(doc);
     const result = { created: 0, updated: 0, errors: [] };
     // targets first so component refs resolve; hypotheses before findings
-    const order = ['agent', 'target', 'component', 'relation', 'hypothesis', 'finding', 'chain', 'assumption', 'lead', 'steer', 'proposal', 'message'];
+    const order = ['agent', 'target', 'component', 'relation', 'hypothesis', 'finding', 'chain', 'assumption', 'rule', 'lead', 'steer', 'proposal', 'message'];
     const deferred = [];
     const apply = (kind, raw) => {
       const { id, kind: _k, createdAt, updatedAt, createdBy, lastTouchedBy, _f, ...fields } = raw;

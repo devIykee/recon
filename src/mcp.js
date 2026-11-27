@@ -68,7 +68,7 @@ Rules of the board:
     inputSchema: {
       type: 'object',
       properties: {
-        kind: { type: 'string', enum: ['target', 'component', 'relation', 'assumption', 'hypothesis', 'finding', 'chain', 'lead', 'steer', 'proposal', 'agent', 'message'] },
+        kind: { type: 'string', enum: ['target', 'component', 'relation', 'assumption', 'hypothesis', 'finding', 'chain', 'lead', 'steer', 'proposal', 'agent', 'message', 'rule'] },
         filter: { type: 'object', description: 'field -> value, exact match', additionalProperties: { type: 'string' } },
       },
       required: ['kind'],
@@ -426,6 +426,49 @@ Rules of the board:
     run: async (c, a) => (a.name ? c.skill(a.name) : (await c.skills()).skills.map(({ id, name, description, use }) => ({ id, name, description, use }))),
   },
   {
+    name: 'recon_rules',
+    description: 'The rules a target must never break, each with its exposure: every function that can change the state the rule is about, and whether anyone, a role or nobody can call it (from recon_scan). Also suggests starter rules for this protocol type with the scanned state filled in, and how to test a rule with each engine. Test the "open" rules first.',
+    inputSchema: { type: 'object', properties: { target: str('Target id or name (default: all)') } },
+    run: (c, a) => c.rules(a.target),
+  },
+  {
+    name: 'recon_add_rule',
+    description: 'Add a rule the protocol must never break, in plain words ("nobody withdraws more than they deposited"), with the state variables it is about so the map can show what can change it. Optionally the executable property (Foundry invariant, Halmos check, Echidna property...).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: str('The rule, in plain words'), target: str('Target id or name'),
+        state: { type: 'array', items: { type: 'string' }, description: 'State variables it is about, e.g. ["sharesOf","totalShares"] (names from recon_rules / recon_scan)' },
+        category: en('ruleCategory', 'conservation | solvency | accounting | bound | access | ordering | other'),
+        formal: str('The executable property, if written'),
+      },
+      required: ['text', 'target'],
+    },
+    run: async (c, a) => {
+      const t = (await c.resolve(a.target, 'target')).item;
+      return compact(await c.create('rule', { text: a.text, targetId: t.id, state: a.state || [], category: a.category, formal: a.formal }));
+    },
+  },
+  {
+    name: 'recon_rule_result',
+    description: 'Record what happened when an engine tried to break a rule. "holds" needs the engine and how hard it tried (runs, depth, senders): it means not broken within those bounds, not proven. "broken" needs the counterexample (the call sequence, senders and values); it becomes a suspected bug with that sequence as its trigger. Reasoning without an engine is "inconclusive".',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        rule: str('Rule id or text'), status: en('ruleStatus', 'holds | broken | inconclusive'),
+        engine: en('ruleEngine', 'Which engine ran it'), runs: str('How hard it tried, e.g. "50k calls, depth 100, 5 senders"'),
+        counterexample: str('For broken: the call sequence that breaks it'), formal: str('The property you ran'),
+      },
+      required: ['rule', 'status'],
+    },
+    run: async (c, a) => {
+      const r = (await c.resolve(a.rule, 'rule')).item;
+      const fields = Object.fromEntries(['status', 'engine', 'runs', 'counterexample', 'formal'].filter((k) => a[k] !== undefined).map((k) => [k, a[k]]));
+      const out = await c.update('rule', r.id, fields);
+      return { ...compact(out), next: out.status === 'broken' ? `Filed as suspected bug ${out.hypothesisId}: confirm it with a code reference and the failing test, then file the finding.` : undefined };
+    },
+  },
+  {
     name: 'recon_dismiss',
     description: 'Clear a suggestion from the briefing that does not apply here, with the reason, e.g. "liquidation is done by an external engine that is out of scope". The human sees the reason in the activity feed. It stays dismissed. To rule out a whole exploit class on one part, set its checklist entry to na with recon_coverage instead.',
     inputSchema: { type: 'object', properties: { id: str('Suggestion id from the briefing (sg_...)'), reason: str('Why it does not apply') }, required: ['id', 'reason'] },
@@ -466,7 +509,7 @@ Rules of the board:
 const INSTRUCTIONS = `recon: a shared board where you and a human research vulnerabilities together.
 1. Call recon_briefing first, and again between tasks. Do its mustDo list top to bottom.
 2. Acknowledge every open steer at once (recon_steer). Until you do, findings, coverage and focus writes are refused.
-3. Work each target in order: map it (recon_scan, then recon_map for what the scan cannot see), record the developers' assumptions, then hunt.
+3. Work each target in order: map it (recon_scan, then recon_map for what the scan cannot see), record the developers' assumptions and the rules it must never break (recon_rules), then hunt: try to break the rules with an engine and chase what the map shows is exposed.
 4. Every claim needs evidence. Findings need a complete confirmation card and earned severity.
 5. Never leave loose ends in chat: record open threads with recon_add_lead and choices with recon_propose options.
 6. This one recon MCP server serves every project and hunt. Never add another MCP server for a hunt; to work on another project, call recon_start_engagement with its name.

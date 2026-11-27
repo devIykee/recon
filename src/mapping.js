@@ -10,7 +10,7 @@ export async function applyMap(c, targetRef, { components = [], relations = [] }
   for (const comp of components) {
     try {
       const cur = byName.get(comp.name.toLowerCase());
-      const fields = Object.fromEntries(['type', 'summary', 'location'].filter((k) => comp[k] !== undefined && comp[k] !== '').map((k) => [k, comp[k]]));
+      const fields = Object.fromEntries(['type', 'summary', 'location', 'surface'].filter((k) => comp[k] !== undefined && comp[k] !== '').map((k) => [k, comp[k]]));
       const mapOnly = comp.type === 'actor' || comp.type === 'external';
       const item = cur
         ? (Object.keys(fields).length ? await c.update('component', cur.id, cur.summary && fields.summary && cur.lastTouchedBy?.startsWith('human') ? { ...fields, summary: cur.summary } : fields) : cur)

@@ -65,6 +65,9 @@ these instructions in its `initialize` response.
 | `recon_scan` | Read the Solidity source and put a first architecture map on the board: contracts, who calls what, transfers, roles. |
 | `recon_map` | Add parts and connections by name (what the scan cannot see: off-chain actors, trust). |
 | `recon_wait` | Instead of ending its turn, the agent listens: returns the moment the human writes to it from the board or decides one of its proposals. |
+| `recon_rules` | The rules, each with every function that can change its state and who can call it; starter rules from the code; how to test with each engine. |
+| `recon_add_rule` | A rule in plain words, with the state it is about. |
+| `recon_rule_result` | What an engine found: `holds` (with engine and runs), `broken` (with the counterexample, filed as a suspected bug), or `inconclusive`. |
 | `recon_dismiss` | Clear a suggestion that does not apply here, with the reason (shown to the human). |
 | `recon_say` | Tell the human something on the board (their Talk panel). |
 | `recon_skill` | The human's skills: list them, or get one's instructions. Also served as MCP prompts. |
@@ -145,6 +148,7 @@ All requests and responses are JSON. Writes need `content-type: application/json
 | PATCH | `/api/report` | `{ shape?, path?, includeIds?, skill?, signOff? }`; agents may only set an empty `path` |
 | GET | `/api/report/brief` | the writing skill and the facts (409 until the human picks a shape) |
 | POST | `/api/report/submit` | `{ documents: [{ findingIds, body } \| { findingIds, fields: [{label, value}] }] }`; 422 lists what breaks the skill |
+| GET | `/api/rules?target=` | rules with their exposure (writers, who can call them), suggested rules, engine hints |
 | GET | `/api/skills` · `/api/skills/:id` | the skills on this machine |
 | GET | `/api/wait?timeout=25` | agents: hold until the human writes (a steer) or decides a proposal; `{ woke, events, next }`. While held the board shows the agent as listening |
 | POST · PUT · DELETE | `/api/skills` · `/api/skills/:id` | human only; POST takes `{ name, description, use, body }` or `{ text }` (a SKILL.md) |

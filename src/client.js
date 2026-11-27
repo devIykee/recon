@@ -4,6 +4,7 @@ import { DEFAULT_PORT } from './config.js';
 
 const PREFIX_KIND = {
   ag: 'agent', tg: 'target', cp: 'component', as: 'assumption', hy: 'hypothesis', fd: 'finding', st: 'steer', pr: 'proposal',
+  rl: 'relation', ch: 'chain', ld: 'lead', ms: 'message', ru: 'rule',
 };
 
 export class ReconError extends Error {
@@ -46,6 +47,7 @@ export function createClient({ url = defaultUrl(), key = process.env.RECON_KEY, 
     pulse: () => req('GET', '/api/pulse'),
     report: () => req('GET', '/api/report'),
     setReport: (fields) => req('PATCH', '/api/report', fields),
+    rules: (target) => req('GET', `/api/rules${target ? `?target=${encodeURIComponent(target)}` : ''}`),
     dismiss: (id, reason) => req('POST', `/api/suggestions/${encodeURIComponent(id)}/dismiss`, { reason }),
     wait: (timeout = 25) => req('GET', `/api/wait?timeout=${timeout}`),
     say: (text, extra = {}) => req('POST', '/api/items/message', { text, ...extra }),

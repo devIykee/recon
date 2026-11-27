@@ -128,7 +128,8 @@ export function enforce(state, kind, next, changed, author, { created = false } 
   const gated = (kind === 'finding' && !(changed.length === 1 && changed[0] === 'evidence'))
     || (kind === 'chain')
     || (kind === 'component' && changed.includes('reviewState'))
-    || (kind === 'agent' && (changed.includes('focus') || changed.includes('focusItem')));
+    || (kind === 'agent' && (changed.includes('focus') || changed.includes('focusItem')))
+    || (kind === 'rule' && changed.includes('status'));
   if (gated && steers.length) {
     throw new GateError(`acknowledge your ${steers.length} open steer(s) first (they never stop your work, but they come first):\n${list(steers.slice(0, 6).map((s) => `${s.id} ${s.action}: ${s.note || ''}`.trim()))}\nUse recon_steer with state "acknowledged" (cli: recon ack <id>).`, 'steers');
   }
@@ -138,6 +139,16 @@ export function enforce(state, kind, next, changed, author, { created = false } 
   if (ignored.length) {
     const s = ignored[0];
     throw new GateError(`you acknowledged steer ${s.id} and have not reported back on it. The human asked: "${s.note || s.action}"${s.itemId ? ` (about ${s.itemId})` : ''}.\nDo that now. When it is done, or if you will not do it, say so: recon_steer id=${s.id} state=addressed response="what you found or why not". To keep going on it, post progress with recon_say replyTo=${s.id}. Other work is refused until then.`, 'steer-ignored');
+  }
+
+  // A rule result has to say how it was reached: "holds" is only as good as the search behind it.
+  if (kind === 'rule' && changed.includes('status')) {
+    if (next.status === 'holds' && (!next.engine || next.engine === 'manual' || !next.runs)) {
+      throw new GateError(`a rule only "holds" as far as an engine tried to break it: say which engine (${['foundry-invariant', 'foundry-fuzz', 'halmos', 'hevm', 'echidna', 'medusa', 'certora', 'kontrol'].join(', ')}) and how hard in runs (e.g. "50k calls, depth 100, 5 senders"). Reasoning alone is "inconclusive".`, 'rule-holds');
+    }
+    if (next.status === 'broken' && (!next.counterexample || !next.engine)) {
+      throw new GateError('a broken rule needs the counterexample (the call sequence, senders and values that break it) and the engine that found it; it becomes a suspected bug with that sequence as its trigger.', 'rule-broken');
+    }
   }
 
   if (kind === 'component' && changed.includes('reviewState') && next.reviewState === 'flagged') {
