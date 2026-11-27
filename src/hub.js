@@ -52,6 +52,21 @@ function wakeEvents(state, agentId, since) {
   return [...steers, ...decided];
 }
 
+// What the human already decided about the report, so agents do not ask again.
+function reportStatus(t) {
+  const r = buildReport(t.store.state);
+  const cfg = r.config;
+  return {
+    shape: cfg.shape || 'not chosen yet: ask the human with recon_propose (combined or separate)',
+    signedBy: cfg.signOff || 'not set yet: ask the human whose name signs it',
+    path: cfg.path || '',
+    skill: t.skills.reportSkill(cfg.skill).name,
+    readyToReport: r.included.map((f) => f.title),
+    notReadyYet: r.excluded.slice(0, 8).map((x) => `${x.title}: ${x.reasons.join('; ')}`),
+    documents: r.documents.map((d) => `${d.name}: ${d.written ? (d.stale ? 'written, out of date' : 'written') : 'not written'}`),
+  };
+}
+
 function stopListening(store, agentId) {
   const agent = store.get('agent', agentId);
   if (!agent?.waitingSince) return;
@@ -308,6 +323,7 @@ export function createHub(overrides = {}) {
       beforeYouStop: beforeYouStop(t.store.state, id),
       whereWeLeftOff: whereWeLeftOff(t.store.state, id),
       skills: t.skills.list().map((s) => ({ id: s.id, name: s.name, description: s.description, use: s.use })),
+      report: reportStatus(t),
     };
   });
 
