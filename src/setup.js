@@ -11,20 +11,27 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { installCopy, ensureHub, openBrowser, reconHome, GITHUB_SPEC } from './launch.js';
-import { createClient } from './client.js';
+import { createClient, defaultUrl } from './client.js';
 import { ENUMS } from './model.js';
 
 export const PASTE_LINE = `Run \`npx -y ${GITHUB_SPEC} agent\` and follow its instructions to do this security review with me on the recon board.`;
 
-const quote = (s) => (/^[\w./:@=+-]+$/.test(s) ? s : JSON.stringify(s));
+// Shorter, shell-friendly path: ~/.recon/bin/recon instead of the absolute home path.
+function tilde(p) {
+  const home = os.homedir();
+  return process.platform !== 'win32' && p.startsWith(`${home}/`) ? `~/${p.slice(home.length + 1)}` : p;
+}
+
+const quote = (s) => (/^[\w./:@=+~-]+$/.test(s) ? s : JSON.stringify(s));
 
 // ---------- recon agent ----------
 
 export async function runAgent({ name, url, key, out = process.stdout, err = process.stderr }) {
   const { bin, shim } = installCopy();
-  const hub = await ensureHub({ url, key, bin, log: (m) => err.write(`${m}\n`) });
+  const hub = await ensureHub({ url: url || defaultUrl(), key, bin, log: (m) => err.write(`${m}\n`) });
   const who = name || '<your-name>';
-  const R = `${quote(shim)} --as ${who}`;
+  const env = hub.url !== defaultUrl({}) ? `RECON_URL=${hub.url} ` : '';
+  const R = `${env}${quote(tilde(shim))} --as ${who}`;
   let state = null;
   try { state = await createClient({ url: hub.url, key }).state(); } catch { /* board still fine */ }
   const lines = [
@@ -185,7 +192,7 @@ export async function runSetup({ url, key, open = true, only = null, here = fals
     if (r.skip) say(`  · ${c.label.padEnd(20)} ${r.out}`);
     else say(r.ok ? `  ✓ ${c.label.padEnd(20)} recon tools added${c.projectOnly ? ' (this project)' : ''}` : `  ✗ ${c.label.padEnd(20)} could not register: ${r.out.split('\n').slice(-1)[0]}`);
   }
-  const hub = await ensureHub({ url, key, bin, log: () => {} });
+  const hub = await ensureHub({ url: url || defaultUrl(), key, bin, log: () => {} });
   say(`  ✓ board                ${hub.url}${hub.started ? '' : ' (already running)'}`);
   if (open && process.env.RECON_NO_OPEN !== '1') openBrowser(hub.url);
   say('');
