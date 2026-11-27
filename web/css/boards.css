@@ -672,3 +672,49 @@
   .sm-hint { display: none; }
   .sm-title .meta { display: none; }
 }
+
+/* ---------- system map: the flow below, and the overview in the corner ---------- */
+.sm-mini { position: absolute; right: 16px; bottom: 16px; z-index: 4; padding: 6px; border-radius: 10px; cursor: pointer; line-height: 0; }
+.sysmap.with-side .sm-mini { right: 392px; }
+.app.sidebar-open .sm-mini { right: calc(var(--sidebar-w) + 32px); }
+.app.sidebar-open .sysmap.with-side .sm-mini { right: calc(var(--sidebar-w) + 408px); }
+.mini-edge { stroke: var(--c); stroke-width: 1; opacity: .45; }
+.mini-edge.hot { opacity: 1; stroke-width: 1.6; }
+.mini-node { fill: var(--island-3); stroke: var(--border-strong); stroke-width: .6; }
+.mini-node[data-type="actor"] { fill: color-mix(in srgb, var(--primary) 35%, var(--island)); }
+.mini-node[data-type="external"] { fill: var(--island-2); stroke-dasharray: 2 2; }
+.mini-node.near { stroke: var(--text); }
+.mini-node.here { fill: var(--primary); stroke: var(--primary); }
+.mini-view { fill: color-mix(in srgb, var(--primary) 10%, transparent); stroke: var(--primary); stroke-width: 1.2; }
+
+.sm-flow { position: absolute; left: 16px; right: 236px; bottom: 64px; z-index: 4; max-height: 34vh; display: flex; flex-direction: column; border-radius: 12px; padding: 8px 10px 10px 12px; box-shadow: var(--shadow-pop); }
+.sm-flow[hidden] { display: none; }
+.sysmap.with-side .sm-flow { right: 608px; }
+.app.sidebar-open .sm-flow { right: calc(var(--sidebar-w) + 252px); }
+.app.sidebar-open .sysmap.with-side .sm-flow { right: calc(var(--sidebar-w) + 624px); }
+.sysmap.with-flow .sm-hint { display: none; }
+.flow-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.flow-head b { font-weight: 600; font-size: 13px; white-space: nowrap; }
+.flow-here { font: 400 17px var(--font-hand); color: var(--primary); }
+.flow-head .meta { color: var(--muted); font-size: 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-rows { overflow: auto; display: flex; flex-direction: column; gap: 4px; padding-bottom: 2px; }
+.flow-row { display: flex; align-items: center; gap: 4px; padding: 4px 6px; border-radius: 8px; white-space: nowrap; width: max-content; min-width: 100%; }
+.flow-row:hover { background: var(--island-2); }
+.flow-node { all: unset; box-sizing: border-box; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 7px; background: var(--island-3); color: var(--text); font-size: 12.5px; font-weight: 550; border: 1px solid transparent; }
+.flow-node .icon { width: 12px; height: 12px; opacity: .8; }
+.flow-node:hover { border-color: var(--border-strong); }
+.flow-node[data-type="actor"] { background: color-mix(in srgb, var(--primary) 16%, var(--island)); border-radius: 12px; }
+.flow-node[data-type="external"] { background: var(--island-2); border: 1px dashed var(--faint); }
+.flow-node.here { background: var(--primary); color: var(--on-primary); }
+.flow-step { display: inline-flex; align-items: baseline; gap: 4px; padding: 0 3px; font-size: 11.5px; color: var(--c); }
+.flow-step .v { font-weight: 650; }
+.flow-step .l { color: var(--muted); }
+.flow-step .arrow { font-weight: 700; }
+.sm-canvas.pathing .sm-node:not(.on-path) { opacity: .25; }
+.sm-canvas.pathing .sm-edge:not(.on-path) path { opacity: .06; }
+.sm-canvas.pathing .sm-edge.on-path path { opacity: 1; stroke-width: 3; }
+.sm-node.on-path { box-shadow: 0 0 0 2px var(--primary); }
+@media (max-width: 800px) {
+  .sm-mini { display: none; }
+  .sm-flow, .sysmap.with-side .sm-flow { left: 8px; right: 8px; bottom: 60px; max-height: 30vh; }
+}
