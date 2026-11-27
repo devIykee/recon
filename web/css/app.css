@@ -120,13 +120,17 @@
 [data-text-size="xl"] .board-inner { width: calc(100% / 1.22); }
 [data-text-size="small"] .board-inner { width: calc(100% / .92); }
 
-/* scrollbars: thin, rounded, and the color of the theme instead of the browser's grey */
-* { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
-::-webkit-scrollbar { width: 10px; height: 10px; }
+/* scrollbars: thin, rounded, in the theme's own colors. Barely there until you
+   point at the panel, so they never compete with the content. */
+:root { --sb-idle: color-mix(in srgb, var(--text) 9%, transparent); --sb-hover: color-mix(in srgb, var(--text) 26%, transparent); --sb-active: color-mix(in srgb, var(--primary) 70%, transparent); }
+* { scrollbar-width: thin; scrollbar-color: var(--sb-idle) transparent; }
+*:hover { scrollbar-color: var(--sb-hover) transparent; }
+::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
-::-webkit-scrollbar-thumb:hover { background-color: var(--scroll-thumb-hover); }
-*:hover { scrollbar-color: var(--scroll-thumb-hover) transparent; }
+::-webkit-scrollbar-thumb { background: var(--sb-idle); border-radius: 9px; border: 2px solid transparent; background-clip: padding-box; min-height: 40px; }
+*:hover::-webkit-scrollbar-thumb { background-color: var(--sb-hover); }
+::-webkit-scrollbar-thumb:active { background-color: var(--sb-active); }
+.tab-panel, .detail-scroll, .sm-side, .skill-list, .eng-list { scrollbar-gutter: stable; }
 
 /* native controls in the board's colors */
 input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); width: 15px; height: 15px; }
@@ -572,3 +576,42 @@ code, .mono { font-family: var(--font-mono); font-size: .9em; }
 .font-choice:hover { border-color: var(--border-strong); }
 .font-choice[aria-pressed="true"] { border-color: var(--primary); background: var(--primary-ghost); }
 @media (max-width: 600px) { .font-choices { grid-template-columns: repeat(2, 1fr); } }
+
+/* themes */
+.theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.theme-card { position: relative; border-radius: 11px; border: 1.5px solid var(--border); background: var(--island-2); }
+.theme-card[aria-pressed="true"] { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-ghost); }
+.theme-pick { all: unset; box-sizing: border-box; display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 8px; cursor: pointer; border-radius: 10px; }
+.theme-pick b { font-size: 13px; font-weight: 600; margin-top: 6px; }
+.theme-pick small { font-size: 11px; color: var(--muted); }
+.theme-preview { display: block; height: 62px; border-radius: 7px; padding: 9px; box-shadow: inset 0 0 0 1px rgba(127, 127, 127, .2); }
+.tp-island { display: flex; flex-direction: column; gap: 5px; height: 100%; border-radius: 5px; border: 1px solid; padding: 7px; }
+.tp-line { display: block; height: 4px; width: 70%; border-radius: 2px; opacity: .9; }
+.tp-line.short { width: 45%; opacity: .7; }
+.tp-dots { display: flex; gap: 4px; margin-top: auto; }
+.tp-dots i { width: 9px; height: 9px; border-radius: 50%; }
+.theme-x { position: absolute; top: 4px; right: 4px; background: var(--island); }
+.theme-add { margin-top: 10px; padding: 12px; border-radius: 10px; background: var(--island-2); }
+.theme-add .help { margin: 0 0 8px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.theme-add .help .mono { font-size: 11px; color: var(--faint); }
+.field > label .spacer { flex: 1; }
+
+/* spacing: compact by default; "Comfortable" in Appearance restores the airier layout */
+:root:not([data-density="comfortable"]) .board { padding: 78px 20px 28px; }
+:root:not([data-density="comfortable"]) .app.has-banner .board { padding-top: 124px; }
+:root:not([data-density="comfortable"]) .board-head { margin: 2px 0 12px; gap: 12px; }
+:root:not([data-density="comfortable"]) .board-head h1 { font-size: 29px; }
+:root:not([data-density="comfortable"]) .board-head p { font-size: 13px; margin-top: 4px; }
+:root:not([data-density="comfortable"]) .target-block { margin-bottom: 22px; }
+:root:not([data-density="comfortable"]) .arch-block { margin-bottom: 22px; }
+:root:not([data-density="comfortable"]) .columns { gap: 10px; }
+:root:not([data-density="comfortable"]) .steer,
+:root:not([data-density="comfortable"]) .sug,
+:root:not([data-density="comfortable"]) .thread { padding: 8px 10px 8px 12px; margin-bottom: 6px; }
+:root:not([data-density="comfortable"]) .tab-panel { padding: 8px; }
+:root:not([data-density="comfortable"]) .panel-head { margin: 2px 2px 6px; }
+:root:not([data-density="comfortable"]) .panel-sub { margin: -3px 2px 8px; }
+:root:not([data-density="comfortable"]) .field { margin-bottom: 11px; }
+:root:not([data-density="comfortable"]) .modal { padding: 20px 22px; }
+:root:not([data-density="comfortable"]) .sysmap { height: calc(100vh - 110px); gap: 6px; }
+:root:not([data-density="comfortable"]) .app.has-banner .sysmap { height: calc(100vh - 156px); }

@@ -136,6 +136,20 @@ your name at the end. The agent gets the facts from the board, writes, and
 submits; markdown, a missing severity or a missing signature is sent back to
 fix. You pick one combined document or one per finding.
 
+**Make it yours.** Menu → *Appearance* picks a theme, the fonts, the spacing
+and the text size, saved in your browser. Besides the default dark and light
+there are five themes adapted from well-known palettes: Nord, Dracula,
+Catppuccin Mocha, Solarized Light and Rosé Pine Dawn. Add your own by pasting
+JSON (or importing a `.json` file); start from the current theme with one click:
+
+```json
+{ "name": "Forest", "base": "dark",
+  "colors": { "bg": "#0f1a14", "island": "#16241c", "primary": "#7bd88f", "text": "#e4efe7" } }
+```
+
+`base` is `dark` or `light`; any color you leave out comes from it. The colors
+you can set are listed in the Appearance window.
+
 **Live everywhere.** Every change from any agent, the API, or another tab
 appears immediately, attributed and animated, in an activity feed you can filter
 by author. Nothing needs a refresh.
