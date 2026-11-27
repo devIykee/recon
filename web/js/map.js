@@ -326,8 +326,8 @@ export function createMap({ stage, world, edges, nodes, markers, expandLayer }) 
         setChildren(body,
           h('div.sum-label', icon('compass'), 'Where to look next'),
           pending.length
-            ? h('div', { style: { font: '400 19px/1.3 var(--font-hand)' } }, `${authorName(pending[0].createdBy)} proposes: ${truncate(pending[0].text, 70)}`)
-            : sug.length ? h('div', { style: { font: '400 20px/1.3 var(--font-hand)' } }, truncate(sug[0].title, 70)) : h('div', { style: { font: '400 20px var(--font-hand)', color: 'var(--muted)' } }, 'Nothing obvious. Nice.'),
+            ? h('div.sum-text', `${authorName(pending[0].createdBy)} proposes: ${truncate(pending[0].text, 70)}`)
+            : sug.length ? h('div.sum-text', truncate(sug[0].title, 70)) : h('div', { style: { font: '400 20px var(--font-hand)', color: 'var(--muted)' } }, 'Nothing obvious. Nice.'),
           h('div.sum-foot', pending.length ? h('span', { style: { color: 'var(--primary)' } }, `${plural(pending.length, 'proposal')} waiting for your yes/no`) : null,
             h('span', `${plural(s.suggestions.length, 'suggestion')} →`)));
         break;

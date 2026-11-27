@@ -225,7 +225,8 @@
 .z-far .node.summary .sum-label .icon { width: 28px; height: 28px; }
 .z-far .node.summary .sum-value { font-size: 92px; }
 .z-far .node.summary .sum-value small { display: none; }
-.z-far .node.summary[data-block="next"] .sum-body > div:nth-child(2) { font-size: 30px !important; }
+.sum-text { font: 400 19px/1.3 var(--font-hand); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.z-far .sum-text { font-size: 28px; -webkit-line-clamp: 3; }
 
 /* ---------- edges ---------- */
 
