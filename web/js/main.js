@@ -49,7 +49,38 @@ function paintTheme() {
 try {
   const t = localStorage.getItem('recon.theme');
   if (t) document.documentElement.dataset.theme = t;
+  for (const k of ['headFont', 'bodyFont', 'textSize']) {
+    const v = localStorage.getItem(`recon.${k}`);
+    if (v) document.documentElement.dataset[k] = v;
+  }
 } catch { /* ignore */ }
+
+// ---------- appearance: fonts and text size ----------
+
+const APPEARANCE = [
+  { key: 'headFont', label: 'Headings and names', help: 'Titles, card names and the map', options: [['', 'Hand-drawn', 'Excalifont'], ['clean', 'Clean', 'Inter'], ['serif', 'Serif', 'Georgia'], ['mono', 'Mono', 'JetBrains Mono']] },
+  { key: 'bodyFont', label: 'Body text', help: 'Everything you read', options: [['', 'Inter', 'Inter'], ['system', 'Your system font', 'system-ui'], ['serif', 'Serif', 'Georgia'], ['mono', 'Mono', 'JetBrains Mono']] },
+  { key: 'textSize', label: 'Text size', help: 'Boards, side panel and windows', options: [['small', 'Small', ''], ['', 'Normal', ''], ['large', 'Large', ''], ['xl', 'Extra large', '']] },
+];
+
+function openAppearance() {
+  const root = document.documentElement;
+  const m = modal([]);
+  const render = () => m.set(
+    h('h2', 'Appearance'),
+    h('p.lead', 'Pick what is easiest on your eyes. It is saved in this browser.'),
+    ...APPEARANCE.map((g) => h('div.field', h('label', g.label, h('span.help', ` · ${g.help}`)),
+      h('div.font-choices', ...g.options.map(([v, name, family]) => h('button.font-choice', {
+        type: 'button', 'aria-pressed': String((root.dataset[g.key] || '') === v),
+        on: { click: () => { if (v) root.dataset[g.key] = v; else delete root.dataset[g.key]; try { if (v) localStorage.setItem(`recon.${g.key}`, v); else localStorage.removeItem(`recon.${g.key}`); } catch { /* ignore */ } render(); } },
+      }, h('b', { style: g.key === 'textSize' ? { fontSize: { small: '14px', '': '17px', large: '20px', xl: '23px' }[v] } : { fontFamily: family ? `'${family}', ${family === 'Georgia' ? 'serif' : family === 'system-ui' ? 'sans-serif' : 'inherit'}` : 'inherit' } }, g.key === 'textSize' ? 'Aa' : 'Recon 0x5f'), h('small', name)))))),
+    h('div.modal-actions',
+      h('button.btn', { on: { click: () => { for (const g of APPEARANCE) { delete root.dataset[g.key]; try { localStorage.removeItem(`recon.${g.key}`); } catch { /* ignore */ } } render(); } } }, 'Reset'),
+      h('span.spacer'),
+      h('button.btn.btn-primary', { on: { click: () => m.close() } }, 'Done')),
+  );
+  render();
+}
 
 // ---------- modules ----------
 
@@ -232,6 +263,7 @@ function openMenu(anchor) {
     { text: 'Hunts…', icon: 'clock', shortcut: 'E', action: openEngagements },
     { text: 'Report…', icon: 'file', shortcut: 'R', action: openReport },
     { text: 'Skills…', icon: 'book', shortcut: 'K', action: () => openSkills() },
+    { text: 'Appearance: fonts and text size…', icon: 'edit', action: openAppearance },
     { text: 'Connect an agent', icon: 'plug', shortcut: 'C', action: () => openConnect() },
     { text: 'Export project (JSON)', icon: 'download', action: exportProject },
     { text: 'Import project…', icon: 'upload', action: importProject },

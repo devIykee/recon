@@ -48,6 +48,7 @@ export async function runAgent({ name, url, key, hunt = undefined, out = process
     'verifies or disputes your claims, and leaves steers for you. Use the recon CLI below.',
     name ? `Your name on the board is "${name}".` : 'Pick a short name for yourself (e.g. claude-code, opencode, grok, codex) and use it in place of <your-name>.',
     'If your tools already include recon_* MCP tools, you may use those instead; they do the same things.',
+    'One "recon" MCP entry serves every project and hunt: never add another MCP server for a hunt.',
     '',
     `  R = ${R}`,
     '',
@@ -232,7 +233,62 @@ export function clients(home = os.homedir()) {
   ];
 }
 
-export async function runSetup({ url, key, open = true, only = null, here = false, err = process.stderr, out = process.stdout }) {
+// ---------- extra recon entries ----------
+// One "recon" MCP entry serves every project and every hunt (it picks the hunt
+// from the project it is started in, or the agent switches with
+// recon_start_engagement). Entries like "recon-szns" are leftovers from setting
+// up one per hunt; this finds them, and removes them when asked.
+
+const strayName = (n) => /^recon[-_. ].+/i.test(n);
+const isOurs = (entry) => /recon/i.test(JSON.stringify(entry || '')) && /\bmcp\b/.test(JSON.stringify(entry || ''));
+
+export function findStrayEntries({ home = os.homedir(), cwd = process.cwd() } = {}) {
+  const found = [];
+  const jsonFiles = [
+    { client: 'Claude Code', file: path.join(home, '.claude.json'), key: 'mcpServers', remove: (name, where) => run('claude', ['mcp', 'remove', '-s', where ? 'local' : 'user', name], where) },
+    { client: 'Gemini CLI', file: path.join(home, '.gemini', 'settings.json'), key: 'mcpServers' },
+    { client: 'Grok CLI', file: path.join(home, '.grok', 'user-settings.json'), key: 'mcpServers' },
+    { client: 'Grok CLI', file: path.join(cwd, '.grok', 'settings.json'), key: 'mcpServers' },
+    { client: 'OpenCode', file: path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'opencode', 'opencode.json'), key: 'mcp' },
+    { client: 'Cursor', file: path.join(home, '.cursor', 'mcp.json'), key: 'mcpServers' },
+    { client: 'Windsurf', file: path.join(home, '.codeium', 'windsurf', 'mcp_config.json'), key: 'mcpServers' },
+  ];
+  for (const f of jsonFiles) {
+    let doc;
+    try { if (!fs.existsSync(f.file)) continue; doc = readJson(f.file); } catch { continue; }
+    for (const [name, entry] of Object.entries(doc[f.key] || {})) if (strayName(name) && isOurs(entry)) found.push({ client: f.client, file: f.file, key: f.key, name, remove: f.remove && ((n) => f.remove(n)) });
+    // Claude Code keeps per-project ("local") servers under projects[path].mcpServers
+    if (f.client === 'Claude Code') {
+      for (const [dir, proj] of Object.entries(doc.projects || {})) {
+        for (const [name, entry] of Object.entries(proj?.mcpServers || {})) if (strayName(name) && isOurs(entry)) found.push({ client: 'Claude Code', file: f.file, project: dir, name, remove: (n) => runIn(dir, 'claude', ['mcp', 'remove', '-s', 'local', n]) });
+      }
+    }
+  }
+  const codex = path.join(process.env.CODEX_HOME || path.join(home, '.codex'), 'config.toml');
+  try {
+    for (const m of fs.readFileSync(codex, 'utf8').matchAll(/^\[mcp_servers\.("?)([^\]"]+)\1\]/gm)) if (strayName(m[2])) found.push({ client: 'Codex CLI', file: codex, name: m[2], remove: (n) => run('codex', ['mcp', 'remove', n]) });
+  } catch { /* no codex config */ }
+  return found;
+}
+
+export function removeStrayEntries(found) {
+  const done = [];
+  for (const f of found) {
+    try {
+      if (f.remove) { const r = f.remove(f.name); if (!r.ok) throw new Error(r.out.split('\n').pop()); }
+      else { const doc = readJson(f.file); delete doc[f.key][f.name]; writeJson(f.file, doc); }
+      done.push({ ...f, ok: true });
+    } catch (e) { done.push({ ...f, ok: false, error: e.message }); }
+  }
+  return done;
+}
+
+function runIn(cwd, cmd, args) {
+  const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', timeout: 60_000, shell: process.platform === 'win32' });
+  return { ok: r.status === 0, out: `${r.stdout || ''}${r.stderr || ''}`.trim() };
+}
+
+export async function runSetup({ url, key, open = true, only = null, here = false, clean = false, err = process.stderr, out = process.stdout }) {
   const say = (s = '') => out.write(`${s}\n`);
   const { bin, shim, app } = installCopy();
   say('');
@@ -249,6 +305,16 @@ export async function runSetup({ url, key, open = true, only = null, here = fals
     results.push({ ...c, ...r });
     if (r.skip) say(`  · ${c.label.padEnd(20)} ${r.out}`);
     else say(r.ok ? `  ✓ ${c.label.padEnd(20)} recon tools added${c.projectOnly ? ' (this project)' : ''}` : `  ✗ ${c.label.padEnd(20)} could not register: ${r.out.split('\n').slice(-1)[0]}`);
+  }
+  const stray = findStrayEntries();
+  if (stray.length) {
+    say('');
+    if (clean) {
+      for (const r of removeStrayEntries(stray)) say(r.ok ? `  ✓ removed ${r.name.padEnd(18)} ${r.client}${r.project ? ` (${r.project})` : ''}` : `  ✗ could not remove ${r.name} from ${r.client}: ${r.error}`);
+    } else {
+      say(`  ! ${stray.length} extra recon MCP entr${stray.length === 1 ? 'y' : 'ies'}: ${stray.map((x) => `${x.name} (${x.client})`).join(', ')}`);
+      say('    One "recon" entry serves every project and hunt. Remove these with: recon setup --clean');
+    }
   }
   const hub = await ensureHub({ url: url || defaultUrl(), key, bin, log: () => {} });
   say(`  ✓ board                ${hub.url}${hub.started ? '' : ' (already running)'}`);

@@ -6,7 +6,7 @@
 // miss (the human was pointing at the bug), then disputes, then claims without
 // proof, then loose ends.
 
-import { openSteersFor, cardGaps, severityProblem } from './quality.js';
+import { openSteersFor, cardGaps, severityProblem, ackedSteersFor, steersBeingIgnored } from './quality.js';
 import { phaseStatus } from './knowledge.js';
 
 const OVERDUE = 30 * 60_000;
@@ -30,10 +30,11 @@ export function mustDo(state, agentId, now = Date.now()) {
     }
   }
 
-  for (const s of Object.values(items.steer)) {
-    if (s.state !== 'acknowledged' || !((s.to || []).includes(agentId) || (s.to || []).includes('all'))) continue;
-    const overdue = now - (s.ackAt || s.updatedAt) > OVERDUE;
-    add('address', s, `${overdue ? 'OVERDUE: ' : ''}report back on steer ${s.id}: ${short(s.note, 80)}`, 'recon_steer state=addressed response="..."', { urgent: overdue });
+  // An acknowledged steer stays in front of the agent on every call until it reports back.
+  const ignored = new Set(steersBeingIgnored(state, agentId, now).map((s) => s.id));
+  for (const s of ackedSteersFor(state, agentId)) {
+    const overdue = ignored.has(s.id) || now - (s.ackAt || s.updatedAt) > OVERDUE;
+    add('address', s, `${overdue ? 'OVERDUE, other work is refused until you answer: ' : 'the human asked, work this now: '}steer ${s.id}: ${short(s.note, 100)}`, `do it, then recon_steer state=addressed response="..." (progress: recon_say replyTo=${s.id})`, { urgent: true });
   }
 
   for (const c of Object.values(items.component)) {

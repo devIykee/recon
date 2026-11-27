@@ -11,7 +11,7 @@ import { createDetail } from './detail.js';
 import { openSteerComposer, authorAvatar } from './steer.js';
 import { bus, loadPlaybook } from './bus.js';
 
-const NODE = { w: 200, h: 78, gapY: 34, gapX: 350, pad: 40 };
+export const NODE = { w: 200, h: 78, gapY: 34, gapX: 350, pad: 40 };
 const TIGHT_GAP = 250; // when there are few connections, columns sit closer
 
 export function phaseStepper(target, { compact = false } = {}) {
@@ -30,7 +30,7 @@ export function phaseStepper(target, { compact = false } = {}) {
 }
 
 // Layered layout: actors first, then by longest path from them, externals last.
-function layout(comps, rels) {
+export function layout(comps, rels) {
   const ids = new Set(comps.map((c) => c.id));
   const edges = rels.filter((r) => ids.has(r.from) && ids.has(r.to) && r.from !== r.to);
   const out = new Map(comps.map((c) => [c.id, []]));
@@ -72,6 +72,11 @@ function layout(comps, rels) {
       return parents.length ? parents.reduce((a, b) => a + b, 0) / parents.length : Infinity;
     };
     nodes.sort((a, b) => score(a) - score(b) || a.createdAt - b.createdAt);
+    // functions of the same contract sit together, placed where the first of them would be
+    const group = (c) => (c.type !== 'actor' && c.type !== 'external' && c.name.includes('.') ? c.name.split('.')[0] : c.id);
+    const firstAt = new Map();
+    nodes.forEach((c, i) => { if (!firstAt.has(group(c))) firstAt.set(group(c), i); });
+    nodes.sort((a, b) => firstAt.get(group(a)) - firstAt.get(group(b)));
     nodes.forEach((c, i) => row.set(c.id, i));
   }
   // A layer with many parts becomes several side-by-side columns instead of one very tall one.
@@ -191,7 +196,7 @@ function assumptionCard(a) {
       h('button.btn.btn-xs', { on: { click: (e) => openSteerComposer(e.currentTarget, { item: a, action: 'challenge' }) } }, icon('challenge'), 'Challenge')));
 }
 
-async function sidePanel(target, el) {
+export async function sidePanel(target, el) {
   const asms = list('assumption', (a) => a.targetId === target.id);
   const dev = asms.filter((a) => a.origin === 'developer');
   const agent = asms.filter((a) => a.origin !== 'developer');

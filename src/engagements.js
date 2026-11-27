@@ -142,6 +142,11 @@ export class Engagements {
     return s;
   }
 
+  // Every hunt that is open right now: the one on screen and any an agent is working in.
+  loaded() {
+    return [this.store, ...this.side.values()].map((store) => ({ id: store.state.project.id, name: store.state.project.name, store }));
+  }
+
   // Give a hunt's file back to the main store: the side copy is saved and dropped.
   releaseSide(id) {
     const s = this.side.get(id);

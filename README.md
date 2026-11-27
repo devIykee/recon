@@ -34,6 +34,11 @@ Desktop, adds recon to each, and opens the board. (Grok CLI keeps MCP servers pe
 project: run `setup --here` inside the project.) Restart your agent and say
 *"Use recon: call recon_briefing and work the board with me."*
 
+One `recon` entry serves every project and every hunt: it picks the hunt from
+the project the agent is working in, and an agent switches with
+`recon_start_engagement`. If you added one entry per hunt earlier (`recon-szns`,
+`recon-yeno`, …), `setup` lists them and `setup --clean` removes them.
+
 Needs Node 20+. Zero dependencies. Everything stays on your machine, in `~/.recon`.
 
 ### Tested with real agents
@@ -153,6 +158,38 @@ Full reference: [docs/API.md](docs/API.md). Every entity, field and enum:
   `~/.recon`, works offline, refuses foreign Host headers and cross-origin writes,
   and serves a strict CSP. Findings and embargoed disclosures never leave your
   machine.
+
+## Reach your local board from anywhere (ngrok)
+
+recon runs on your machine by default, so only agents on that machine can reach
+it. To let an agent or LLM somewhere else connect (a cloud agent, a second
+computer, an LLM client that takes a remote MCP server), put the hub behind a
+tunnel such as [ngrok](https://ngrok.com). A tunnel puts your board on the
+internet, so run it in server mode, which requires a key:
+
+```sh
+pkill -f 'recon.js serve'                          # stop the board agents started in the background, if any
+export RECON_KEY="$(openssl rand -hex 24)"          # the password for the board; keep it secret
+ngrok http 4317                                    # note the https://<name>.ngrok-free.app address it prints
+RECON_ALLOWED_HOSTS=<name>.ngrok-free.app,localhost,127.0.0.1 \
+  recon serve --mode server                        # serve your existing board, now keyed
+```
+
+It serves the same hunts from the same data folder; only one board may run on
+it at a time. Then point the remote agent at the tunnel:
+
+- **MCP over HTTP**: `https://<name>.ngrok-free.app/mcp` with the header
+  `Authorization: Bearer <RECON_KEY>`, and `X-Recon-Agent: <its name>` if the
+  client lets you set headers.
+- **CLI**: `RECON_URL=https://<name>.ngrok-free.app RECON_KEY=<key> recon briefing`
+  (or paste the agent line with those two variables set).
+- **The board in a browser**: open the https address and enter the key once.
+  On ngrok's free plan the first browser visit shows an ngrok warning page;
+  click through it. Agents and the CLI are not affected.
+
+`RECON_ALLOWED_HOSTS` keeps the protection against DNS rebinding: requests
+that name any other host are refused. Stop ngrok and the board is local
+again. Any tunnel works the same way (Cloudflare Tunnel, Tailscale Funnel).
 
 ## Deploy
 

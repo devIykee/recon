@@ -23,6 +23,40 @@ export function openSteersFor(state, agentId) {
   return Object.values(state.items.steer).filter((s) => s.state === 'open' && ((s.to || []).includes(agentId) || (s.to || []).includes('all')));
 }
 
+// How long an agent may keep working on other things after acknowledging a
+// steer before it has to report back (or post progress on it).
+export const STEER_WINDOW_MS = 10 * 60_000;
+export const STEER_WINDOW_WRITES = 6;
+
+// Steers this agent acknowledged and has not reported back on. A steer to "all"
+// belongs to whoever acknowledged it.
+export function ackedSteersFor(state, agentId) {
+  return Object.values(state.items.steer).filter((s) => s.state === 'acknowledged'
+    && ((s.to || []).includes(agentId) || ((s.to || []).includes('all') && (s._f?.state?.by || s.lastTouchedBy) === agentId)));
+}
+
+// The last time the agent said anything about the steer: the ack, or a message replying to it.
+export function lastProgressOn(state, s, agentId) {
+  const replies = Object.values(state.items.message || {}).filter((m) => m.replyTo === s.id && m.createdBy === agentId).map((m) => m.createdAt);
+  return Math.max(s.ackAt || s.updatedAt, ...replies);
+}
+
+// Acknowledged, then worked on something else for too long without a word back.
+export function steersBeingIgnored(state, agentId, now = Date.now()) {
+  return ackedSteersFor(state, agentId).filter((s) => {
+    const since = lastProgressOn(state, s, agentId);
+    const writes = state.activity.filter((a) => a.by === agentId && a.at > since && a.itemId !== s.id).length;
+    return now - since > STEER_WINDOW_MS || writes >= STEER_WINDOW_WRITES;
+  });
+}
+
+// Writes that are about the steer, or that answer it, are always allowed.
+function aboutSteer(s, kind, next) {
+  if (['steer', 'message', 'proposal', 'lead', 'agent'].includes(kind)) return true;
+  if (!s.itemId) return false;
+  return next.id === s.itemId || next.componentId === s.itemId || next.hypothesisId === s.itemId || next.targetId === s.itemId;
+}
+
 const CARD = [
   ['attacker', 'who the attacker is: stranger, holder, privileged or admin'],
   ['reachability', 'how they reach it: permissionless, needs-role, needs-config or needs-social'],
@@ -97,6 +131,13 @@ export function enforce(state, kind, next, changed, author, { created = false } 
     || (kind === 'agent' && (changed.includes('focus') || changed.includes('focusItem')));
   if (gated && steers.length) {
     throw new GateError(`acknowledge your ${steers.length} open steer(s) first (they never stop your work, but they come first):\n${list(steers.slice(0, 6).map((s) => `${s.id} ${s.action}: ${s.note || ''}`.trim()))}\nUse recon_steer with state "acknowledged" (cli: recon ack <id>).`, 'steers');
+  }
+
+  // Acknowledging a steer is a promise to act on it, not a way past the gate above.
+  const ignored = steersBeingIgnored(state, author).filter((s) => !aboutSteer(s, kind, next) && !(changed.length === 1 && changed[0] === 'evidence'));
+  if (ignored.length) {
+    const s = ignored[0];
+    throw new GateError(`you acknowledged steer ${s.id} and have not reported back on it. The human asked: "${s.note || s.action}"${s.itemId ? ` (about ${s.itemId})` : ''}.\nDo that now. When it is done, or if you will not do it, say so: recon_steer id=${s.id} state=addressed response="what you found or why not". To keep going on it, post progress with recon_say replyTo=${s.id}. Other work is refused until then.`, 'steer-ignored');
   }
 
   if (kind === 'component' && changed.includes('reviewState') && next.reviewState === 'flagged') {

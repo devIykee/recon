@@ -11,6 +11,7 @@ one-line setup
   recon setup                           add recon's tools to every agent cli found (claude code, codex,
                                         gemini, opencode, cursor, windsurf, claude desktop), open the board.
                                         --here also adds it to project-scoped clients (grok) in this folder
+                                        --clean removes extra recon-* entries: one "recon" serves every hunt
   recon agent [--as NAME]               for agents: start the board if needed and print how to use it
 
 run the hub
@@ -224,8 +225,9 @@ async function mcp() {
   const { runMcp } = await import('../src/mcp.js');
   const { projectName } = await import('../src/project.js');
   // each project gets its own hunt: named after the git repo / package / folder the agent runs in
+  // an explicit --hunt pins it; otherwise the client's workspace (MCP roots) can correct it
   const hunt = flags.hunt === false ? null : (huntRef || projectName(process.cwd()));
-  await runMcp({ name: flags.name || agentName || 'agent', url: flags.url, key: flags.key ?? process.env.RECON_KEY, model: flags.model, hunt });
+  await runMcp({ name: flags.name || agentName || 'agent', url: flags.url, key: flags.key ?? process.env.RECON_KEY, model: flags.model, hunt, huntPinned: Boolean(huntRef) || flags.hunt === false });
 }
 
 async function status() {
@@ -582,7 +584,7 @@ async function reset() {
 async function setup() {
   const { runSetup } = await import('../src/setup.js');
   const only = flags.only ? String(flags.only).split(',') : null;
-  await runSetup({ url: flags.url, key: flags.key ?? process.env.RECON_KEY, open: flags.open !== false, only, here: Boolean(flags.here) });
+  await runSetup({ url: flags.url, key: flags.key ?? process.env.RECON_KEY, open: flags.open !== false, only, here: Boolean(flags.here), clean: Boolean(flags.clean) });
 }
 
 async function agentCmd() {

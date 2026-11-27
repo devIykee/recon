@@ -2,7 +2,7 @@
 // and what to do next (agent proposals + recon's suggestions).
 
 import { h, icon, keyed, setChildren, timeEl, toast, plural } from './ui.js';
-import { live, list, byId, titleOf, authorName, post, write, get, patch, healthOf } from './state.js';
+import { live, list, byId, titleOf, authorName, post, write, get, patch, healthOf, on } from './state.js';
 import { STEER, STEER_STATE, ACTION_LABEL, KIND_ICON, LEAD_STATE, VALUE } from './labels.js';
 import { authorAvatar, openSteerComposer } from './steer.js';
 import { bus } from './bus.js';
@@ -309,6 +309,10 @@ export function createSidebar(root) {
 
   // ---------- talk: write to an agent without touching its terminal ----------
 
+  // Where each agent was last seen working when that is not the hunt on screen.
+  const away = new Map();
+  on((e) => { if (e.type === 'hunt-activity' && e.activity?.by) away.set(e.activity.by, { hunt: e.hunt?.name, at: Date.now() }); });
+
   let talkTo = (() => { try { return localStorage.getItem('recon.talkTo') || 'all'; } catch { return 'all'; } })();
 
   function renderTalk() {
@@ -346,8 +350,10 @@ export function createSidebar(root) {
     const who = talkTo === 'all' ? null : byId(talkTo);
     const st = who ? healthOf(who.id).status : null;
     const anyListening = agents.filter(listening);
+    const elsewhere = who && away.get(who.id) && Date.now() - away.get(who.id).at < 15 * 60_000 && st !== 'active' && !listening(who) ? away.get(who.id).hunt : null;
     const line = who
-      ? listening(who) ? ['ok', `${who.name} is listening. It reads this the moment you send it.`]
+      ? elsewhere ? ['warn', `${who.name} is working in the hunt "${elsewhere}", not this one. It is told you wrote here on its next step and has to switch hunts to answer. To talk in its own hunt, open "${elsewhere}" (E).`]
+      : listening(who) ? ['ok', `${who.name} is listening. It reads this the moment you send it.`]
         : st === 'active' ? ['info', `${who.name} is working. It sees this with its next step and answers here.`]
           : ['warn', `${who.name} is not connected right now. It sees this when it comes back. To keep an agent listening, tell it once: "when you are done, call recon_wait".`]
       : anyListening.length ? ['ok', `${anyListening.map((a) => a.name).join(', ')} ${anyListening.length === 1 ? 'is' : 'are'} listening. Everyone else sees this with their next step.`]
