@@ -7,6 +7,7 @@ import { emptyState } from './store.js';
 export function seedExample(store) {
   store.state = emptyState('Example engagement');
   store.state.project.example = true;
+  store.gatesOff = true; // the example is written as a finished snapshot, not through the agent gates
   const human = 'human';
   const scout = store.touchAgent('Scout', { transport: 'demo' });
   store.patch('agent', scout.id, { focus: 'Reading the liquidation path', model: 'example agent' }, scout.id);
@@ -123,6 +124,12 @@ export function seedExample(store) {
     bugClass: 'rounding',
     stage: 'testing',
     notes: 'Each withdraw of 1 share pays ceil(totalAssets / totalSupply). Over many calls the pool pays out more than it holds per share.',
+    attacker: 'holder',
+    reachability: 'permissionless',
+    bound: 'Only dust per call; profitable only while gas is cheaper than the rounding gain.',
+    liveFunds: 'unknown',
+    alreadyReported: 'unknown',
+    verificationMethod: 'unit',
     evidence: [{ ref: 'contracts/core/LendingPool.sol:152', note: 'mulDivUp on payout' }],
   }, scout.id);
 
@@ -136,6 +143,7 @@ export function seedExample(store) {
 
   store.patch('agent', scout.id, { focusItem: liquidate.id }, scout.id);
   void deposit;
+  store.gatesOff = false;
   store.log({ by: 'human', action: 'note', kind: 'project', summary: 'opened the example engagement' });
   store.emit('reset', store.state);
   store.save();

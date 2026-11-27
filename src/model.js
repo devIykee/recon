@@ -25,14 +25,25 @@ export const ENUMS = Object.freeze({
   steerKind: ['recheck', 'challenge', 'cover', 'verify', 'priority', 'note'],
   steerState: ['open', 'acknowledged', 'addressed'],
   proposalState: ['pending', 'accepted', 'declined'],
+  leadState: ['open', 'blocked', 'done', 'dropped'],
+  value: ['high', 'med', 'low'],
   verification: ['unverified', 'verified', 'disputed'],
   priority: ['low', 'normal', 'high', 'urgent'],
-  evidenceKind: ['code', 'tx', 'log', 'test', 'link', 'note'],
+  evidenceKind: ['code', 'test', 'fork', 'tx', 'log', 'link', 'note'],
+  attacker: ['stranger', 'holder', 'privileged', 'admin'],
+  reachability: ['permissionless', 'needs-role', 'needs-config', 'needs-social'],
+  fundsMethod: ['eth_call', 'fork', 'explorer', 'not-measured'],
+  reported: ['no', 'yes', 'unknown'],
+  verifyMethod: ['fork', 'eth_call', 'unit', 'fuzz', 'live-tx', 'manual'],
+  testResult: ['pass', 'fail', 'not-run'],
+  exploitStage: ['capability', 'trigger', 'full'],
+  chainGlue: ['same-tx', 'same-caller', 'config+code', 'social+code', 'other'],
+  reportShape: ['combined', 'separate'],
   checkState: ['unchecked', 'checked', 'na'],
 });
 
 export const KINDS = Object.freeze([
-  'agent', 'target', 'component', 'relation', 'assumption', 'hypothesis', 'finding', 'steer', 'proposal',
+  'agent', 'target', 'component', 'relation', 'assumption', 'hypothesis', 'finding', 'chain', 'steer', 'proposal', 'lead',
 ]);
 
 // Component types that describe the system but are not attack surface to review.
@@ -51,6 +62,7 @@ const en = (name, owner = A, def) => ({ type: 'string', enum: name, owner, defau
 const arr = (owner = A) => ({ type: 'array', owner, default: [] });
 const obj = (owner = A) => ({ type: 'object', owner, default: {} });
 const num = (owner = A) => ({ type: 'number', owner });
+const bool = (owner = A) => ({ type: 'boolean', owner });
 
 // Fields every item carries.
 export const SHARED_FIELDS = {
@@ -67,6 +79,7 @@ export const SCHEMA = {
     color: str(),
     avatar: str(),
     transport: en('transport', A, 'api'),
+    transports: arr(),
     status: en('agentStatus', A, 'active'),
     focus: str(),
     focusItem: str(),
@@ -81,6 +94,15 @@ export const SCHEMA = {
     focus: str(),
     scope: str(),
     phase: en('phase', A, 'mapping'),
+    // what the program covers, so agents do not hunt or file out of scope
+    inScope: str(),
+    outOfScope: str(),
+    alreadyReported: arr(),
+    disclosureChannel: str(),
+    severityScale: str(),
+    bountyRules: str(),
+    playbooks: arr(),
+    ignoredClasses: arr(),
   },
   component: {
     targetId: str(A, { required: true, ref: 'target' }),
@@ -119,6 +141,9 @@ export const SCHEMA = {
     status: en('hypothesisStatus', A, 'testing'),
     dropReason: str(),
     findingId: str(A, { ref: 'finding' }),
+    exploitStage: en('exploitStage', A),
+    trigger: str(),
+    confirm: { type: 'object', owner: A, default: {}, merge: 'byKey' },
   },
   finding: {
     title: str(A, { required: true }),
@@ -132,6 +157,29 @@ export const SCHEMA = {
     notes: str(),
     repro: str(),
     hypothesisId: str(A, { ref: 'hypothesis' }),
+    // the confirmation card: a finding is not valid until these are answered
+    attacker: en('attacker', A),
+    reachability: en('reachability', A),
+    bound: str(),
+    liveFunds: str(),
+    liveFundsMethod: en('fundsMethod', A),
+    alreadyReported: en('reported', A),
+    alreadyReportedRef: str(),
+    verificationMethod: en('verifyMethod', A),
+    testName: str(),
+    testResult: en('testResult', A),
+    productionTouched: bool(),
+    productionNote: str(),
+  },
+  // Several weaker issues that combine into a stronger one.
+  chain: {
+    title: str(A, { required: true }),
+    targetId: str(A, { ref: 'target' }),
+    parts: arr(),
+    glue: en('chainGlue', A, 'other'),
+    gluePermissionless: bool(),
+    result: str(),
+    severity: en('severity', A, 'medium'),
   },
   steer: {
     action: en('steerKind', A, 'note'),
@@ -148,14 +196,29 @@ export const SCHEMA = {
     itemKind: str(),
     steerKind: en('steerKind', A, 'cover'),
     rationale: str(),
+    options: arr(),
+    choice: str(),
     state: en('proposalState', A, 'pending'),
+  },
+  // An open thread: work worth doing that is not done yet, so nothing is forgotten.
+  lead: {
+    text: str(A, { required: true }),
+    why: str(),
+    value: en('value', A, 'med'),
+    state: en('leadState', A, 'open'),
+    blockedBy: str(),
+    nextStep: str(),
+    outcome: str(),
+    targetId: str(A, { ref: 'target' }),
+    componentId: str(A, { ref: 'component' }),
+    itemId: str(),
   },
 };
 
 // The field that names an item in the ui and in activity summaries.
 export const TITLE_FIELD = {
   agent: 'name', target: 'name', component: 'name', relation: 'label', assumption: 'text',
-  hypothesis: 'text', finding: 'title', steer: 'note', proposal: 'text',
+  hypothesis: 'text', finding: 'title', chain: 'title', steer: 'note', proposal: 'text', lead: 'text',
 };
 
 // Fields whose change reads as "moved" in the activity feed.
@@ -215,6 +278,11 @@ export function validateFields(kind, fields, { author, partial = false } = {}) {
     }
     if (f.type === 'array' && !Array.isArray(value)) { errors.push(`"${key}" must be an array`); continue; }
     if (f.type === 'object' && (typeof value !== 'object' || Array.isArray(value))) { errors.push(`"${key}" must be an object`); continue; }
+    if (f.type === 'boolean') {
+      if (typeof value !== 'boolean') { errors.push(`"${key}" must be true or false`); continue; }
+      out[key] = value;
+      continue;
+    }
     if (f.type === 'number') {
       const n = typeof value === 'string' ? Number(value) : value;
       if (typeof n !== 'number' || Number.isNaN(n)) { errors.push(`"${key}" must be a number`); continue; }
@@ -237,10 +305,11 @@ export function validateFields(kind, fields, { author, partial = false } = {}) {
     }
   }
   if (out.evidence) out.evidence = normalizeEvidence(out.evidence, author);
-  if (out.checklist) {
-    for (const [k, v] of Object.entries(out.checklist)) {
+  for (const field of ['checklist', 'confirm']) {
+    if (!out[field]) continue;
+    for (const [k, v] of Object.entries(out[field])) {
       const state = typeof v === 'string' ? v : v?.state;
-      if (!ENUMS.checkState.includes(state)) errors.push(`checklist "${k}" must be one of: ${ENUMS.checkState.join(', ')}`);
+      if (!ENUMS.checkState.includes(state)) errors.push(`${field} "${k}" must be one of: ${ENUMS.checkState.join(', ')}`);
     }
   }
   if (errors.length) throw new ValidationError(errors.join('; '), errors);
@@ -257,6 +326,9 @@ export function normalizeEvidence(list, author) {
       kind,
       ref: String(e.ref || '').slice(0, 2000),
       note: String(e.note || '').slice(0, 8000),
+      ...(e.rpc ? { rpc: String(e.rpc).slice(0, 300) } : {}),
+      ...(e.block ? { block: String(e.block).slice(0, 40) } : {}),
+      ...(e.result ? { result: String(e.result).slice(0, 40) } : {}),
       by: e.by || author || 'unknown',
       at: e.at || Date.now(),
     };
@@ -265,6 +337,7 @@ export function normalizeEvidence(list, author) {
 
 function guessEvidenceKind(ref) {
   if (/^0x[0-9a-f]{64}$/i.test(ref)) return 'tx';
+  if (/^test[_A-Z]|\.t\.sol|forge test|::test/.test(ref)) return 'test';
   if (/^https?:\/\//.test(ref)) return 'link';
   if (/[\w/.-]+\.(sol|rs|move|vy|go|ts|js|py|cairo)(:\d+)?/.test(ref) || /::|\(\)|#L\d+/.test(ref)) return 'code';
   return 'note';
@@ -287,7 +360,7 @@ export function slug(text) {
 
 const PREFIX = {
   agent: 'ag', target: 'tg', component: 'cp', relation: 'rl', assumption: 'as', hypothesis: 'hy',
-  finding: 'fd', steer: 'st', proposal: 'pr',
+  finding: 'fd', chain: 'ch', steer: 'st', proposal: 'pr', lead: 'ld',
 };
 
 let idSeq = 0;

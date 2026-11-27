@@ -38,7 +38,17 @@ write (as the human, or as an agent with --as NAME)
   recon add assumption <text> [--origin developer|agent] [--category trust|invariant|input|external|economic]
                               [--target T] [--component C] [--rationale ...]
   recon add hypothesis <text> [--component C] [--confidence low|med|high] [--class reentrancy]
-  recon add finding <title> [--severity high] [--component C] [--stage testing] [--hypothesis H]
+  recon add finding <title> --severity S --attacker stranger|holder|privileged|admin
+                    --reachability permissionless|needs-role|needs-config|needs-social --bound "..."
+                    --funds none|unknown|"<addr> <amount>" [--funds-method eth_call|fork|explorer]
+                    --reported no|yes|unknown [--reported-ref ...] --verified fork|eth_call|unit|fuzz|live-tx|manual
+                    [--test test_Name --test-result pass] [--component C] [--hypothesis H] [--stage testing]
+  recon add hypothesis <text> --stage capability|trigger|full [--trigger "..."] [--component C] [--class X]
+  recon add lead <what is left> --value high|med|low [--why ...] [--blocked "what is in the way"] [--next "next step"]
+  recon add chain <title> --part <id> --part <id> --glue same-tx|same-caller|config+code|social+code
+                    --result "..." [--severity S] [--permissionless]
+  recon ready <finding>                 re-run every gate: card, evidence, severity, test, duplicates
+  recon propose <text> [--option "A" --option "B"] [--rationale ...]
       any add takes --evidence "ref" or --evidence "ref|what it shows" (repeatable)
   recon coverage <component> <untouched|scanning|reviewed|flagged> [--reasoning ...] [--evidence ...]
   recon set <id|name> field=value [field=value...]
@@ -51,7 +61,7 @@ write (as the human, or as an agent with --as NAME)
   recon address <steerId> <response>    report back on a steer
   recon steer <id|name|agent> <recheck|challenge|cover|verify|note> [note] [--to agent]   (human)
   recon verify|dispute|unverify <id|name>                                                   (human)
-  recon accept|decline <proposalId>                                                         (human)
+  recon accept|decline <proposalId> [choice]                                                (human)
 
 move data
   recon push <file.json>                merge a json document into the board
@@ -310,17 +320,37 @@ async function add() {
       };
       break;
     case 'hypothesis':
-      fields = { text: need(text, 'text'), targetId: await ref(flags.target, 'target'), componentId: await ref(flags.component, 'component'), bugClass: flags.class, confidence: flags.confidence };
+      fields = {
+        text: need(text, 'text'), targetId: await ref(flags.target, 'target'), componentId: await ref(flags.component, 'component'),
+        bugClass: flags.class, confidence: flags.confidence, exploitStage: flags.stage, trigger: flags.trigger,
+      };
+      break;
+    case 'lead':
+      fields = {
+        text: need(text, 'what is left to do'), why: flags.why, value: flags.value || 'med', state: flags.blocked ? 'blocked' : 'open',
+        blockedBy: typeof flags.blocked === 'string' ? flags.blocked : undefined, nextStep: flags.next,
+        targetId: await ref(flags.target, 'target') || await onlyTarget(api), componentId: await ref(flags.component, 'component'),
+      };
+      break;
+    case 'chain':
+      fields = {
+        title: need(text, 'title'), parts: many(flags.part).flatMap((x) => String(x).split(',')).map((x) => x.trim()).filter(Boolean),
+        glue: flags.glue || 'other', gluePermissionless: flags.permissionless === true, result: flags.result, severity: flags.severity,
+        targetId: await ref(flags.target, 'target') || await onlyTarget(api),
+      };
       break;
     case 'finding':
       fields = {
         title: need(text, 'title'), targetId: await ref(flags.target, 'target'), componentId: await ref(flags.component, 'component'),
         hypothesisId: await ref(flags.hypothesis, 'hypothesis'), severity: flags.severity, stage: flags.stage, bugClass: flags.class,
         bounty: flags.bounty !== undefined ? Number(flags.bounty) : undefined, notes: flags.notes, repro: flags.repro,
+        attacker: flags.attacker, reachability: flags.reachability, bound: flags.bound, liveFunds: flags.funds,
+        liveFundsMethod: flags['funds-method'], alreadyReported: flags.reported, alreadyReportedRef: flags['reported-ref'],
+        verificationMethod: flags.verified, testName: flags.test, testResult: flags['test-result'],
       };
       break;
     default:
-      throw new ReconError(2, `cannot add "${kind}". add target, component, assumption, hypothesis or finding`);
+      throw new ReconError(2, `cannot add "${kind}". add target, component, actor, external, assumption, hypothesis, finding, lead or chain`);
   }
   if (fields.componentId && !fields.targetId && kind !== 'component') fields.targetId = (await api.resolve(fields.componentId, 'component')).item.targetId;
   const it = await api.create(kind, clean({ ...base, ...fields }));
@@ -403,7 +433,8 @@ async function claim() {
 
 async function propose() {
   const api = client();
-  const fields = { text: need(pos.join(' '), 'text'), rationale: flags.rationale, steerKind: flags.kind };
+  const fields = { text: need(pos.join(' '), 'text'), rationale: flags.rationale, steerKind: flags.kind, options: many(flags.option).map(String) };
+  if (!fields.options.length) delete fields.options;
   if (flags.item) { const r = await api.resolve(flags.item); fields.itemId = r.item.id; fields.itemKind = r.kind; }
   const p = await api.create('proposal', clean(fields));
   out(p, () => `proposed ${dim(p.id)}. the human will say yes or no; check \`recon briefing\`.`);
@@ -446,7 +477,7 @@ async function verdict(v) {
 
 async function decide(verb) {
   const api = client();
-  const p = await api.proposal(need(pos[0], 'proposal id'), verb);
+  const p = await api.proposal(need(pos[0], 'proposal id'), verb, pos.slice(1).join(' ') || undefined);
   out(p, () => `proposal ${dim(p.id)} → ${tint(p.state)}`);
 }
 
@@ -527,6 +558,21 @@ async function start() {
   out(r, () => (r.existing ? `already working on "${r.project.name}"` : `started "${r.project.name}". add the target next: recon add target "<name>" --type <protocol type>`));
 }
 
+async function ready() {
+  const api = client();
+  const f = (await api.resolve(need(pos.join(' '), 'finding id or title'), 'finding')).item;
+  const r = await api.checkFinding(f.id);
+  out(r, () => [
+    `${r.ready ? COLORS.reviewed('ready to report') : COLORS.flagged('not ready')}  ${bold(r.title)} ${dim(r.severity)}`,
+    ...r.card.map((g) => `  card      ${g.field}: ${g.why}`),
+    ...r.evidence.map((g) => `  evidence  ${g}`),
+    ...(r.severity ? [`  severity  ${r.severity}`] : []),
+    ...(r.testPassing ? [] : ['  test      the last run is not "pass"']),
+    ...(r.duplicateOf ? [`  duplicate of ${r.duplicateOf.id} "${r.duplicateOf.title}"`] : []),
+    ...(r.matchesAlreadyReported ? [`  matches already reported: ${r.matchesAlreadyReported.title}`] : []),
+  ].join('\n'));
+}
+
 async function sessions() {
   const r = await client().engagements();
   out(r, () => r.engagements.map((e) => `${e.id === r.current ? COLORS.reviewed('●') : ' '} ${dim(e.id.padEnd(22))} ${bold(e.name)}${e.example ? dim(' (example)') : ''}${e.archived ? dim(' (archived)') : ''}  ${dim(`${e.stats?.targets ?? 0} targets · ${e.stats?.findings ?? 0} findings · ${ago(e.updatedAt)}`)}`).join('\n'));
@@ -581,7 +627,7 @@ const COMMANDS = {
   steers, ack: () => steerVerb('ack'), address: () => steerVerb('address'), steer,
   verify: () => verdict('verified'), dispute: () => verdict('disputed'), unverify: () => verdict('unverified'),
   accept: () => decide('accept'), decline: () => decide('decline'),
-  setup, agent: agentCmd, start, relate, phase, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
+  setup, agent: agentCmd, start, relate, phase, ready, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
 };
 
 async function main() {
@@ -590,6 +636,10 @@ async function main() {
   const fn = COMMANDS[cmd];
   if (!fn) { process.stderr.write(`unknown command "${cmd}"\n\n${HELP}`); process.exit(2); }
   await fn();
+  // Agents get the same nudge on the cli as over mcp: anything urgent prints after the command.
+  if (agentName && !['briefing', 'steers', 'ack', 'serve', 'mcp', 'agent', 'setup', 'watch', 'help'].includes(cmd) && !asJson) {
+    try { const p = await client().pulse(); if (p?.pulse) process.stderr.write(`\n${p.pulse}\n`); } catch { /* the board can answer next time */ }
+  }
 }
 
 main().catch((err) => {

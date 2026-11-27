@@ -119,7 +119,14 @@ test('steer round trip and proposals through mcp', async () => {
   const st = store.create('steer', { action: 'cover', note: 'check the flash loan path', to: ['ag_tester'] }, 'human');
   const b = await rpc.tool('recon_briefing');
   assert.equal(b.data.steers[0].id, st.id);
-  assert.match(b.data.next, /example|Acknowledge/);
+  assert.match(b.data.next, /acknowledge steer/i);
+  assert.equal(b.data.mustDo[0].kind, 'steer');
+  const blocked = await rpc.tool('recon_coverage', { component: 'InterestRateModel', reviewState: 'scanning' });
+  assert.equal(blocked.isError, true, 'coverage refused while a steer is unacknowledged');
+  assert.match(blocked.text, /acknowledge your 1 open steer/);
+  const lead = await rpc.call('tools/call', { name: 'recon_add_lead', arguments: { text: 'measure collection TVL', value: 'high', blockedBy: 'public RPC has no archive logs' } });
+  assert.equal(lead.result.content.length, 2, 'pulse rides along on other tool results');
+  assert.match(lead.result.content[1].text, /come before your next step/);
   await rpc.tool('recon_steer', { steerId: st.id, state: 'acknowledged' });
   const done = await rpc.tool('recon_steer', { steerId: st.id, state: 'addressed', response: 'covered, nothing found' });
   assert.equal(done.data.state, 'addressed');

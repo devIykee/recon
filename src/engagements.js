@@ -188,7 +188,9 @@ export class Engagements {
     const id = this.store.state.project.id;
     const dir = this.snapDir(id);
     fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, `${new Date(now).toISOString().replace(/[:.]/g, '-')}.json`);
+    const stamp = new Date(now).toISOString().replace(/[:.]/g, '-');
+    let file = path.join(dir, `${stamp}.json`);
+    for (let n = 1; fs.existsSync(file); n++) file = path.join(dir, `${stamp}-${n}.json`);
     fs.writeFileSync(file, this.store.serialize(), { mode: 0o600 });
     this.lastSnapshotRev = this.store.rev;
     this.lastSnapshotAt = now;

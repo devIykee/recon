@@ -1,6 +1,8 @@
 // Agent health: who is active, idle, stuck, looping, or producing noise.
 // Computed from presence and the activity log, so agents do not have to report it.
 
+import { openSteersFor } from './quality.js';
+
 export const IDLE_AFTER = 90_000;
 export const OFFLINE_AFTER = 10 * 60_000;
 export const STUCK_AFTER = 8 * 60_000;
@@ -19,6 +21,9 @@ export function agentHealth(state, agent, now = Date.now()) {
   else if (now - lastWrite > STUCK_AFTER) { status = 'stuck'; flags.push('no-output'); }
   else status = 'active';
 
+  // idle while the human is waiting on it is not idle, it is stuck
+  const waiting = openSteersFor(state, agent.id).filter((st) => now - st.createdAt > 5 * 60_000);
+  if (waiting.length && (status === 'idle' || status === 'active')) { flags.push('ignoring-steers'); if (status === 'idle') status = 'stuck'; }
   if (status === 'idle') flags.push('idle');
   if (status === 'offline') flags.push('offline');
 

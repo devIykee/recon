@@ -182,13 +182,14 @@ export class DemoAgent {
     this.queue.push(() => s.addEvidence('component', c.id, n.evidence[0], id));
     this.queue.push(() => s.patch('component', c.id, { checklist: Object.fromEntries(n.checks.map((k) => [k, 'checked'])) }, id));
     if (n.evidence[1]) this.queue.push(() => s.addEvidence('component', c.id, n.evidence[1], id));
-    this.queue.push(() => s.patch('component', c.id, { reviewState: n.state, reasoning: n.reasoning }, id));
     if (n.hypothesis) {
+      // a flag needs a testable claim, so the hypothesis comes first
       this.queue.push(() => {
         const exists = Object.values(s.state.items.hypothesis).some((h) => h.componentId === c.id);
         if (!exists) s.create('hypothesis', { ...n.hypothesis, targetId: c.targetId, componentId: c.id, evidence: n.evidence }, id);
       });
     }
+    this.queue.push(() => s.patch('component', c.id, { reviewState: n.state, reasoning: n.reasoning }, id));
   }
 }
 

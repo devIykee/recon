@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { phaseStatus } from './knowledge.js';
+import { enforce } from './quality.js';
 import {
   KINDS, ENUMS, fieldsFor, validateFields, withDefaults, newId, slug, isHuman,
   MOVE_FIELDS, TITLE_FIELD, AGENT_COLORS, ValidationError, OwnershipError, isKind,
@@ -133,7 +134,7 @@ export class Store extends EventEmitter {
 
   // ---------- writes ----------
 
-  create(kind, fields, author, { at, silent = false, id } = {}) {
+  create(kind, fields, author, { at, silent = false, id, force = false } = {}) {
     if (!isKind(kind)) throw new ValidationError(`unknown kind "${kind}"`);
     const clean = validateFields(kind, fields, { author });
     this.checkRefs(kind, clean);
@@ -150,6 +151,7 @@ export class Store extends EventEmitter {
       lastTouchedBy: author,
       _f: {},
     };
+    if (!this.gatesOff && !force) enforce(this.state, kind, item, Object.keys(clean), author, { created: true });
     if (kind === 'agent' && !item.color) item.color = AGENT_COLORS[Object.keys(this.state.items.agent).length % AGENT_COLORS.length];
     if (kind === 'agent' && !item.avatar) item.avatar = initials(item.name);
     if (clean.checklist) item.checklist = mergeByKey({}, clean.checklist, author, ts);
@@ -177,6 +179,7 @@ export class Store extends EventEmitter {
     const spec = fieldsFor(kind);
     const changed = [];
     const before = {};
+    const nextValues = {};
     for (const [key, value] of Object.entries(clean)) {
       const clock = item._f[key];
       if (at && clock && clock.at > at) continue; // stale external write; newer value wins
@@ -185,12 +188,16 @@ export class Store extends EventEmitter {
       if (f.merge === 'byId') next = mergeById(item[key] || [], value);
       else if (f.merge === 'byKey') next = mergeByKey(item[key] || {}, value, author, ts);
       if (deepEqual(item[key], next)) continue;
-      before[key] = item[key];
-      item[key] = next;
-      item._f[key] = { at: ts, by: author };
+      nextValues[key] = next;
       changed.push(key);
     }
     if (!changed.length) { this.noteNoop(author); return item; }
+    if (!force && !this.gatesOff) enforce(this.state, kind, { ...item, ...nextValues }, changed, author);
+    for (const key of changed) {
+      before[key] = item[key];
+      item[key] = nextValues[key];
+      item._f[key] = { at: ts, by: author };
+    }
     item.updatedAt = Math.max(item.updatedAt, ts);
     item.lastTouchedBy = author;
     const action = actionFor(kind, changed, item, before);
@@ -260,13 +267,14 @@ export class Store extends EventEmitter {
     let agent = this.get('agent', id);
     const now = Date.now();
     if (!agent) {
-      agent = this.create('agent', { name, transport: transport || 'api', status: 'active', ...(model ? { model } : {}) }, id);
+      agent = this.create('agent', { name, transport: transport || 'api', transports: [transport || 'api'], status: 'active', ...(model ? { model } : {}) }, id);
       agent.lastSeen = now;
       return agent;
     }
     // Presence is not news: refresh quietly, broadcast without an activity entry.
     let dirty = false;
     if (transport && agent.transport !== transport) { agent.transport = transport; dirty = true; }
+    if (transport && !(agent.transports || []).includes(transport)) { agent.transports = [...(agent.transports || []), transport]; dirty = true; }
     if (agent.status === 'offline' || agent.status === 'idle') { agent.status = 'active'; dirty = true; }
     agent.lastSeen = now;
     if (dirty) { agent.updatedAt = this.tick(); this.emitChange('upsert', 'agent', agent, null); this.save(); }
@@ -402,23 +410,40 @@ export class Store extends EventEmitter {
   merge(doc, author) {
     const items = docItems(doc);
     const result = { created: 0, updated: 0, errors: [] };
-    // targets first so component refs resolve
-    const order = ['agent', 'target', 'component', 'relation', 'hypothesis', 'finding', 'assumption', 'steer', 'proposal'];
+    // targets first so component refs resolve; hypotheses before findings
+    const order = ['agent', 'target', 'component', 'relation', 'hypothesis', 'finding', 'chain', 'assumption', 'lead', 'steer', 'proposal'];
+    const deferred = [];
+    const apply = (kind, raw) => {
+      const { id, kind: _k, createdAt, updatedAt, createdBy, lastTouchedBy, _f, ...fields } = raw;
+      this.resolveNames(fields);
+      const existing = id ? this.get(kind, id) : null;
+      const at = typeof updatedAt === 'number' ? updatedAt : undefined;
+      const clean = stripHumanFields(kind, fields, author);
+      if (existing) { this.patch(kind, id, clean, author, { at }); result.updated++; }
+      else { this.create(kind, clean, author, { id }); result.created++; }
+    };
     for (const kind of order) {
       for (const raw of items[kind] || []) {
-        try {
-          const { id, kind: _k, createdAt, updatedAt, createdBy, lastTouchedBy, _f, ...fields } = raw;
-          const existing = id ? this.get(kind, id) : null;
-          const at = typeof updatedAt === 'number' ? updatedAt : undefined;
-          const clean = stripHumanFields(kind, fields, author);
-          if (existing) { this.patch(kind, id, clean, author, { at }); result.updated++; }
-          else { this.create(kind, clean, author, { id }); result.created++; }
-        } catch (err) {
-          result.errors.push(`${kind}${raw.id ? ` ${raw.id}` : ''}: ${err.message}`);
+        try { apply(kind, raw); } catch (err) {
+          if (err.name === 'GateError') deferred.push([kind, raw, err]);
+          else result.errors.push(`${kind}${raw.id ? ` ${raw.id}` : ''}: ${err.message}`);
         }
       }
     }
+    // gated writes may pass once the rest of the document has landed (e.g. a flag and its hypothesis)
+    for (const [kind, raw, first] of deferred) {
+      try { apply(kind, raw); } catch (err) { result.errors.push(`${kind}${raw.id ? ` ${raw.id}` : ''}: ${(err || first).message}`); }
+    }
     return result;
+  }
+
+  // Drop-in documents may name things instead of using ids: "component": "Vault.withdraw()".
+  resolveNames(fields) {
+    const byName = (kind, name) => Object.values(this.state.items[kind]).find((x) => String(x.name || x.title || x.text).toLowerCase() === String(name).toLowerCase());
+    if (fields.component && !fields.componentId) { const c = byName('component', fields.component); if (c) { fields.componentId = c.id; if (!fields.targetId) fields.targetId = c.targetId; } }
+    if (fields.target && !fields.targetId) { const t = byName('target', fields.target); if (t) fields.targetId = t.id; }
+    if (fields.hypothesis && !fields.hypothesisId) { const h = byName('hypothesis', fields.hypothesis); if (h) fields.hypothesisId = h.id; }
+    delete fields.component; delete fields.target; delete fields.hypothesis;
   }
 
   replace(doc, author = 'human') {

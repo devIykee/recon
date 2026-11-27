@@ -29,12 +29,12 @@ test('drop-in json is merged item by item and re-merged on change', async () => 
   fs.writeFileSync(file, JSON.stringify({
     agent: { name: 'filebot' },
     targets: [{ name: 'Bridge', protocolType: 'bridge', components: [{ name: 'receiveMessage()', reviewState: 'flagged', evidence: [{ id: 'e1', ref: 'Bridge.sol:77' }] }] }],
-    hypotheses: [{ text: 'source chain is not validated', bugClass: 'message-validation', confidence: 'high' }],
+    hypotheses: [{ text: 'source chain is not validated', bugClass: 'message-validation', confidence: 'high', component: 'receiveMessage()' }],
   }));
   await wait(150);
   fs.writeFileSync(file, JSON.stringify({
     agent: { name: 'filebot' },
-    hypotheses: [{ text: 'source chain is not validated', bugClass: 'message-validation', confidence: 'med' }],
+    hypotheses: [{ text: 'source chain is not validated', bugClass: 'message-validation', confidence: 'med', component: 'receiveMessage()' }],
   }));
   await wait(150);
   w.close();

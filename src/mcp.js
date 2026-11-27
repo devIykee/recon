@@ -18,9 +18,12 @@ const evidenceSchema = {
   items: {
     type: 'object',
     properties: {
-      ref: { type: 'string', description: 'e.g. "contracts/Vault.sol:120", "Vault.withdraw()", a tx hash, a url' },
+      ref: { type: 'string', description: 'e.g. "contracts/Vault.sol:120", a test name like "test_Drain", a tx hash, a url' },
       note: { type: 'string', description: 'What this shows, in a sentence' },
-      kind: { type: 'string', enum: ENUMS.evidenceKind },
+      kind: { type: 'string', enum: ENUMS.evidenceKind, description: 'code = file:line; test = a unit/fuzz test; fork = a fork run against live bytecode; tx = a transaction' },
+      rpc: { type: 'string', description: 'fork evidence: which network/rpc' },
+      block: { type: 'string', description: 'fork evidence: block number' },
+      result: { type: 'string', description: 'test or fork result, e.g. "pass"' },
     },
     required: ['ref'],
   },
@@ -48,7 +51,7 @@ export const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        kind: { type: 'string', enum: ['target', 'component', 'assumption', 'hypothesis', 'finding', 'steer', 'proposal', 'agent'] },
+        kind: { type: 'string', enum: ['target', 'component', 'relation', 'assumption', 'hypothesis', 'finding', 'chain', 'lead', 'steer', 'proposal', 'agent'] },
         filter: { type: 'object', description: 'field -> value, exact match', additionalProperties: { type: 'string' } },
       },
       required: ['kind'],
@@ -166,11 +169,17 @@ export const TOOLS = [
         reasoning: str('What you checked and concluded'),
         evidence: evidenceSchema,
         checklist: { type: 'object', description: 'checklist id (from recon_get) -> checked | na | unchecked', additionalProperties: { type: 'string', enum: ENUMS.checkState } },
+        hypothesis: {
+          type: 'object', description: 'Required when flagging: the testable claim behind the smell. Created on this component before the flag.',
+          properties: { text: str('The suspected bug'), bugClass: str('e.g. reentrancy'), confidence: en('confidence', 'low | med | high'), exploitStage: en('exploitStage', 'capability | trigger | full') },
+          required: ['text'],
+        },
       },
       required: ['component'],
     },
     run: async (c, a) => {
       const { item } = await c.resolve(a.component, 'component');
+      if (a.hypothesis?.text) await c.create('hypothesis', { ...a.hypothesis, componentId: item.id, targetId: item.targetId, evidence: a.evidence });
       const fields = pick(a, ['reviewState', 'reasoning', 'evidence', 'checklist']);
       const out = await c.update('component', item.id, fields);
       if (a.reviewState === 'scanning') await c.heartbeat({ focus: `Reviewing ${item.name}`, focusItem: item.id }).catch(() => {});
@@ -194,21 +203,23 @@ export const TOOLS = [
   },
   {
     name: 'recon_add_hypothesis',
-    description: 'Record a suspected bug you are about to test. Update it later with recon_update (status confirmed or dropped + dropReason).',
+    description: 'Record a suspected bug you are about to test. Ask yourself first: is this a capability without a trigger? Update it later with recon_update (status confirmed needs code + test/fork/tx evidence; or dropped + dropReason).',
     inputSchema: {
       type: 'object',
       properties: {
         text: str('The suspected bug in one sentence'), targetId: str('Target id'), componentId: str('Component id'),
         bugClass: str('An exploit class id from the playbook, e.g. "reentrancy"'), confidence: en('confidence', 'low | med | high'),
+        exploitStage: en('exploitStage', 'capability: the power exists but no public path makes it fire yet. trigger: you found the path, impact unproven. full: trigger plus impact. Only full can become a finding.'),
+        trigger: str('The public call path that makes it fire, once found'),
         reasoning: str('Why you suspect it'), evidence: evidenceSchema,
       },
-      required: ['text'],
+      required: ['text', 'exploitStage'],
     },
     run: async (c, a) => compact(await c.create('hypothesis', await resolveRefs(c, a))),
   },
   {
     name: 'recon_add_finding',
-    description: 'Record a confirmed vulnerability with evidence and, ideally, a reproduction. Link the hypothesis it came from.',
+    description: 'Record a confirmed vulnerability. It is refused until its confirmation card is complete (attacker, reachability, bound, liveFunds, alreadyReported, verificationMethod), its severity is earned (Critical: permissionless + measured live funds; High: an outsider path), it is not a duplicate of an existing finding (same component + bug class: add evidence or a chain instead), and its source hypothesis is exploitStage "full".',
     inputSchema: {
       type: 'object',
       properties: {
@@ -216,8 +227,20 @@ export const TOOLS = [
         targetId: str('Target id'), componentId: str('Component id'), hypothesisId: str('Source hypothesis id'),
         bugClass: str('e.g. "rounding"'), stage: en('findingStage', 'Usually "testing" until reproduced'),
         notes: str('Impact and root cause'), repro: str('Steps or test that reproduces it'), evidence: evidenceSchema,
+        attacker: en('attacker', 'Who can do it: stranger, holder, privileged, admin'),
+        reachability: en('reachability', 'permissionless, needs-role, needs-config (a setting the team chose), needs-social'),
+        bound: str('One sentence on what still cannot happen'),
+        liveFunds: str('"none", "unknown", or address + amount at risk now'),
+        liveFundsMethod: en('fundsMethod', 'How liveFunds was measured'),
+        alreadyReported: en('reported', 'Did you check prior reports and audits?'),
+        alreadyReportedRef: str('The report/audit you checked, or "distinct: <how it differs>"'),
+        verificationMethod: en('verifyMethod', 'How you verified it'),
+        testName: str('The test that proves it, e.g. test_ReentrantDrain'),
+        testResult: en('testResult', 'Result of the last run'),
+        productionTouched: { type: 'boolean', description: 'Did you send anything to mainnet/production? Default false.' },
+        productionNote: str('If production was touched: why it was necessary and safe'),
       },
-      required: ['title'],
+      required: ['title', 'severity', 'attacker', 'reachability', 'bound', 'liveFunds', 'alreadyReported', 'verificationMethod'],
     },
     run: async (c, a) => compact(await c.create('finding', await resolveRefs(c, a))),
   },
@@ -264,12 +287,13 @@ export const TOOLS = [
   },
   {
     name: 'recon_propose',
-    description: 'Propose your next move to the human for a quick yes/no instead of going idle or going rogue. Check recon_briefing later: accepted proposals come back as acknowledged steers.',
+    description: 'Propose your next move to the human instead of going idle, going rogue, or asking in chat. Give options when there is a real choice; the human picks one with a click. Accepted proposals come back as acknowledged steers in recon_briefing.',
     inputSchema: {
       type: 'object',
       properties: {
         text: str('What you want to do next'), rationale: str('Why it is worth it'),
         itemId: str('The item it concerns, if any'), steerKind: en('steerKind', 'The kind of work it is'),
+        options: { type: 'array', items: { type: 'string' }, description: 'Choices for the human to pick from with one click, e.g. ["Send the combined report", "Split: High first, then Mediums", "Keep hunting TVL first"]' },
       },
       required: ['text'],
     },
@@ -305,6 +329,41 @@ export const TOOLS = [
     },
   },
   {
+    name: 'recon_add_lead',
+    description: 'Record an open thread: something worth doing that is not done yet (blocked by an RPC limit, needs a live NFT, needs the audit PDF...). Record every one before you stop so nothing is forgotten. Update it later with recon_update (state done / dropped / blocked, outcome).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: str('What is left to do'), why: str('Why it matters: what it would prove or change'),
+        value: en('value', 'high | med | low'), state: en('leadState', 'open or blocked'),
+        blockedBy: str('What is in the way, if blocked'), nextStep: str('The concrete next action'),
+        targetId: str('Target id or name'), componentId: str('Component id or name'), itemId: str('A related hypothesis/finding id'),
+      },
+      required: ['text', 'value'],
+    },
+    run: async (c, a) => compact(await c.create('lead', await resolveRefs(c, a))),
+  },
+  {
+    name: 'recon_add_chain',
+    description: 'Link hypotheses/findings that combine into a stronger issue, instead of filing a second finding. A chain raises severity only if the glue is something an attacker controls (gluePermissionless).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: str('One line'), parts: { type: 'array', items: { type: 'string' }, description: 'Hypothesis or finding ids (at least two)' },
+        glue: en('chainGlue', 'How they combine'), gluePermissionless: { type: 'boolean', description: 'Can an outsider force the combination?' },
+        result: str('The extra impact no single part has'), severity: en('severity', 'Severity of the combination'), targetId: str('Target id or name'),
+      },
+      required: ['title', 'parts', 'glue', 'result'],
+    },
+    run: async (c, a) => compact(await c.create('chain', await resolveRefs(c, a))),
+  },
+  {
+    name: 'recon_check_finding',
+    description: 'Re-run every gate on a finding: confirmation card, evidence, severity, passing test, duplicates, already reported. Call before reporting it.',
+    inputSchema: { type: 'object', properties: { ref: str('Finding id or title') }, required: ['ref'] },
+    run: async (c, a) => c.checkFinding((await c.resolve(a.ref, 'finding')).item.id),
+  },
+  {
     name: 'recon_playbook',
     description: 'The playbook for a protocol type: what usually goes wrong, plain explanations, and concrete checks with ids.',
     inputSchema: { type: 'object', properties: { protocolType: en('protocolType', 'Protocol type') }, required: ['protocolType'] },
@@ -312,13 +371,13 @@ export const TOOLS = [
   },
 ];
 
-const INSTRUCTIONS = `recon is a shared board where you and a human research vulnerabilities together.
-Start with recon_briefing (if it says the board holds the example, call recon_start_engagement first). Work every target in order: 1) map the system with recon_map, 2) record the developers' assumptions (origin "developer"), 3) hunt. Move phases with recon_phase. Acknowledge the human's steers right away (recon_steer), then work them.
-Record as you go: recon_coverage for what you reviewed, recon_add_assumption for what you take for granted,
-recon_add_hypothesis for suspected bugs, recon_add_finding once confirmed. Attach evidence (file:line, function,
-tx) to every claim; the human verifies or disputes claims and disputed ones come back to you.
-Use recon_focus to say what you are doing, and recon_propose when you are unsure what to do next.
-Never set verification or priority, and do not overwrite components another agent owns.`;
+const INSTRUCTIONS = `recon: a shared board where you and a human research vulnerabilities together.
+1. Call recon_briefing first, and again between tasks. Do its mustDo list top to bottom.
+2. Acknowledge every open steer at once (recon_steer). Until you do, findings, coverage and focus writes are refused.
+3. Work each target in order: map it (recon_map), record the developers' assumptions, then hunt.
+4. Every claim needs evidence. Findings need a complete confirmation card and earned severity.
+5. Never leave loose ends in chat: record open threads with recon_add_lead and choices with recon_propose options.
+Never set verification or priority; those belong to the human.`;
 
 function compact(it) {
   if (!it || typeof it !== 'object') return it;
@@ -376,8 +435,13 @@ export async function dispatch(msg, { getClient, onInitialize } = {}) {
         const tool = TOOLS.find((t) => t.name === params?.name);
         if (!tool) return fail(-32602, `unknown tool ${params?.name}`);
         try {
-          const result = await tool.run(await getClient(), params.arguments || {});
-          return ok({ content: [{ type: 'text', text: JSON.stringify(result, null, 1) }] });
+          const client = await getClient();
+          const result = await tool.run(client, params.arguments || {});
+          const content = [{ type: 'text', text: JSON.stringify(result, null, 1) }];
+          if (tool.name !== 'recon_briefing' && tool.name !== 'recon_playbook') {
+            try { const p = await client.pulse(); if (p?.pulse) content.push({ type: 'text', text: p.pulse }); } catch { /* the board can still answer next time */ }
+          }
+          return ok({ content });
         } catch (err) {
           const detail = err instanceof ReconError && err.details ? `\n${[].concat(err.details).join('\n')}` : '';
           return ok({ content: [{ type: 'text', text: `error: ${err.message}${detail}` }], isError: true });

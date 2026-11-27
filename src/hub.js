@@ -16,6 +16,8 @@ import { describeModel, isKind, ENUMS, KINDS } from './model.js';
 import { healthAll } from './health.js';
 import { DemoAgent } from './demo.js';
 import { Engagements } from './engagements.js';
+import { mustDo, pulse, beforeYouStop, whereWeLeftOff } from './proactive.js';
+import { cardGaps, severityProblem, evidenceGaps, duplicateOf, reportedMatch } from './quality.js';
 import { watchSource } from './dropin.js';
 import { loadConfig, ROOT } from './config.js';
 import { createClient } from './client.js';
@@ -224,12 +226,15 @@ export function createHub(overrides = {}) {
     const state = { accept: 'accepted', decline: 'declined' }[params.verb];
     if (!state) throw new HttpError(404, 'use accept or decline');
     if (who !== 'human') throw new HttpError(403, 'only a human accepts or declines proposals');
-    const p = t.store.patch('proposal', params.id, { state }, who);
+    const cur = t.store.get('proposal', params.id);
+    const choice = typeof body?.choice === 'string' ? body.choice.slice(0, 500) : '';
+    if (choice && cur?.options?.length && !cur.options.includes(choice)) throw new HttpError(400, `choice must be one of: ${cur.options.join(' | ')}`);
+    const p = t.store.patch('proposal', params.id, { state, ...(choice ? { choice } : {}) }, who);
     if (state === 'accepted' && body?.steer !== false) {
       // Accepting a proposal tells the proposer to go ahead, through the same steer channel.
       t.store.create('steer', {
         action: p.steerKind || 'note', itemId: p.itemId || '', itemKind: p.itemKind || '',
-        to: [p.createdBy], note: `Go ahead: ${p.text}`, state: 'acknowledged',
+        to: [p.createdBy], note: choice ? `Decision: ${choice} (re: ${p.text})` : `Go ahead: ${p.text}`, state: 'acknowledged',
       }, who);
     }
     return p;
@@ -262,7 +267,40 @@ export function createHub(overrides = {}) {
   route('GET', '/api/briefing', ({ t, who, query }) => {
     const id = who !== 'human' ? who : query.get('agent') ? agentIdFor(query.get('agent')) : null;
     if (!id) throw new HttpError(400, 'send X-Recon-Agent: <name> (or ?agent=<name>) to get a briefing');
-    return briefing(t.store.state, id);
+    const todo = mustDo(t.store.state, id);
+    const b = briefing(t.store.state, id);
+    return {
+      mustDo: todo,
+      ...b,
+      next: todo.length ? `${todo[0].do} (${todo[0].how})` : b.next,
+      beforeYouStop: beforeYouStop(t.store.state, id),
+      whereWeLeftOff: whereWeLeftOff(t.store.state, id),
+    };
+  });
+
+  route('GET', '/api/pulse', ({ t, who }) => {
+    if (who === 'human') return { pulse: null, mustDo: [] };
+    return { pulse: pulse(t.store.state, who), mustDo: mustDo(t.store.state, who) };
+  });
+
+  // Re-run every gate against a finding and say what stands between it and a valid report.
+  route('GET', '/api/findings/:id/check', ({ t, params }) => {
+    const f = t.store.get('finding', params.id);
+    if (!f) throw new HttpError(404, `finding "${params.id}" not found`);
+    const s = t.store.state;
+    const dup = duplicateOf(s, f);
+    const prior = reportedMatch(s, f);
+    const card = cardGaps(f);
+    const evidence = evidenceGaps(f);
+    const severity = severityProblem(f);
+    const testOk = !['fork', 'unit', 'fuzz'].includes(f.verificationMethod) || f.testResult === 'pass';
+    return {
+      id: f.id, title: f.title, severity: f.severity,
+      ready: !card.length && !evidence.length && !severity && testOk && !dup && !(prior && f.alreadyReported !== 'yes'),
+      card, evidence, severity, testPassing: testOk,
+      duplicateOf: dup ? { id: dup.id, title: dup.title } : null,
+      matchesAlreadyReported: prior,
+    };
   });
 
   route('POST', '/api/heartbeat', ({ t, who, body }) => {
@@ -427,7 +465,12 @@ export function createHub(overrides = {}) {
     const t = auth ? tenant(auth.tenant) : null;
     const who = t ? actor(req, auth, t) : 'human';
     const result = await match.handler({ req, url, params, query: url.searchParams, body, auth, t, who });
-    sendJson(res, 200, result);
+    const extra = {};
+    if (t && who !== 'human') {
+      const todo = mustDo(t.store.state, who).filter((x) => x.urgent);
+      if (todo.length) extra['x-recon-pulse'] = `${todo.length} urgent: ${todo[0].do}`.replace(/[^\x20-\x7e]/g, '').slice(0, 300);
+    }
+    sendJson(res, 200, result, extra);
   }
 
   // MCP over HTTP (streamable http, json responses). Lets a remote agent use a hosted
@@ -592,9 +635,9 @@ function securityHeaders() {
   };
 }
 
-function sendJson(res, status, data) {
+function sendJson(res, status, data, extra = {}) {
   const body = JSON.stringify(data ?? null);
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...securityHeaders() });
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...securityHeaders(), ...extra });
   res.end(body);
 }
 
