@@ -96,7 +96,6 @@ export function seedExample(store) {
     note: 'Can flashLoan() be called while a liquidation is mid-flight? Worth a look.',
   }, human);
 
-  store.patch('target', t.id, { focus: liquidate.id }, scout.id);
   store.patch('agent', scout.id, { focusItem: liquidate.id }, scout.id);
   void deposit;
   store.log({ by: 'human', action: 'note', kind: 'project', summary: 'opened the example engagement' });

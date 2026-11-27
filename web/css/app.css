@@ -347,6 +347,7 @@ code, .mono { font-family: var(--font-mono); font-size: .9em; }
 .verb.disputed, .verb.removed, .verb.declined { color: var(--bad); background: rgba(255, 107, 107, .13); }
 .verb.steered, .verb.proposed { color: var(--st-flagged); background: rgba(255, 146, 43, .14); }
 .verb.acknowledged { color: var(--warn); background: rgba(252, 196, 25, .13); }
+.verb.focus { color: var(--muted); background: transparent; border: 1px solid var(--border); line-height: 15px; }
 .verb.evidence, .verb.claimed { color: var(--st-scanning); background: rgba(77, 171, 247, .13); }
 
 /* ---------- popovers, menus, tooltip ---------- */

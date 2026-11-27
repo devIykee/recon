@@ -492,6 +492,7 @@ function actionFor(kind, changed, item, before) {
   if (kind === 'steer' && changed.includes('state')) return item.state === 'addressed' ? 'addressed' : item.state === 'acknowledged' ? 'acknowledged' : 'reopened';
   if (kind === 'proposal' && changed.includes('state')) return item.state === 'accepted' ? 'accepted' : item.state === 'declined' ? 'declined' : 'updated';
   if (changed.includes('priority')) return 'prioritized';
+  if (kind === 'agent' && (changed.includes('focus') || changed.includes('focusItem'))) return 'focus';
   if (kind === 'component' && changed.length === 1 && changed[0] === 'owner') return 'claimed';
   if (changed.length === 1 && changed[0] === 'evidence') return 'evidence';
   if (changed.some((c) => MOVE_FIELDS.has(c))) return 'moved';
@@ -519,6 +520,7 @@ function summarize(action, kind, item, changed = [], before = {}) {
     case 'prioritized': return `set priority of "${name}" to ${item.priority}`;
     case 'claimed': return `claimed "${name}"`;
     case 'evidence': return `attached evidence to "${name}"`;
+    case 'focus': return item.focus ? `now: ${trim(item.focus, 90)}` : 'cleared focus';
     case 'moved': {
       const f = changed.find((c) => MOVE_FIELDS.has(c));
       return `moved "${name}" ${before[f] ? `${before[f]} → ` : 'to '}${item[f]}`;
