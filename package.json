@@ -1,0 +1,35 @@
+{
+  "name": "recon",
+  "version": "0.1.0",
+  "description": "A shared cockpit where a human and AI agents hunt vulnerabilities together.",
+  "type": "module",
+  "license": "MIT",
+  "author": "dev iyke",
+  "bin": {
+    "recon": "bin/recon.js"
+  },
+  "main": "src/hub.js",
+  "files": [
+    "bin",
+    "src",
+    "web",
+    "docs"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node bin/recon.js serve",
+    "dev": "node bin/recon.js serve --open",
+    "mcp": "node bin/recon.js mcp",
+    "test": "node --test test/"
+  },
+  "keywords": [
+    "security",
+    "audit",
+    "agents",
+    "mcp",
+    "bug-bounty",
+    "smart-contracts"
+  ]
+}
