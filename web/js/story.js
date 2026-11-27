@@ -32,6 +32,19 @@ const REL_WORDS = {
 };
 
 const p = (...parts) => h('p', ...parts);
+
+// "Vault calls FeeController (withdrawFeeBps()), transfers tokens to or from IERC20 (transferFrom())."
+function connections(it) {
+  const out = list('relation', (r) => r.from === it.id);
+  const inc = list('relation', (r) => r.to === it.id);
+  const phrase = (r, other) => [REL_WORDS[r.type] || 'connects to', ' ', b(nameOf(other)), r.label ? ` (${r.label})` : ''];
+  const join = (rs, pick) => rs.flatMap((r, i) => [i ? (i === rs.length - 1 ? ' and ' : ', ') : '', ...phrase(r, pick(r))]);
+  const lines = [];
+  if (out.length) lines.push(p('It ', ...join(out, (r) => r.to), '.'));
+  if (inc.length) lines.push(p('Reached by: ', ...inc.flatMap((r, i) => [i ? (i === inc.length - 1 ? ' and ' : ', ') : '', b(nameOf(r.from)), ` (${REL_WORDS[r.type] || 'connects to'}${r.label ? `: ${r.label}` : ''})`]), '.'));
+  if (!out.length && !inc.length) lines.push(p('Not connected to anything on the map yet, so nobody has said what it calls or what can reach it.'));
+  return lines;
+}
 const b = (t) => h('b', t);
 const nameOf = (id) => byId(id)?.name || byId(id)?.title || byId(id)?.text || '';
 const who = (it) => (it.createdBy?.startsWith('human') ? 'You' : authorName(it.createdBy));
@@ -87,7 +100,7 @@ export function storyFor(it) {
       const finds = list('finding', (x) => x.componentId === it.id).length;
       const owner = it.owner ? authorName(it.owner) : null;
       if (it.type === 'actor' || it.type === 'external') {
-        return { lines: [p(b(it.name), ': ', it.summary || (it.type === 'actor' ? 'a person or role that uses the system.' : 'something outside the system it depends on.'))], status: it.type === 'actor' ? 'An actor: who uses the system.' : 'An outside dependency.', tone: 'muted' };
+        return { lines: [p(b(it.name), ': ', it.summary || (it.type === 'actor' ? 'a person or role that uses the system.' : 'something outside the system it depends on.')), ...connections(it)], status: it.type === 'actor' ? 'An actor: who uses the system.' : 'An outside dependency.', tone: 'muted' };
       }
       const state = {
         untouched: ['Nobody has looked at this part yet.', 'warn'],
@@ -98,6 +111,7 @@ export function storyFor(it) {
       return {
         lines: [
           p(b(it.name), it.summary ? [': ', it.summary] : ''),
+          ...connections(it),
           it.reasoning ? p(it.reviewState === 'flagged' ? 'What looks wrong: ' : 'What was checked: ', it.reasoning) : null,
           hyps || finds ? p(`${hyps} suspected bug${hyps === 1 ? '' : 's'} and ${finds} finding${finds === 1 ? '' : 's'} here.`) : null,
         ],

@@ -61,12 +61,13 @@ export function authorAvatar(author, size = 'xs') {
 }
 
 // A small composer anchored to a button.
-export function openSteerComposer(anchor, { item, action = 'note', to } = {}) {
+export function openSteerComposer(anchor, { item, action = 'note', to, text = '' } = {}) {
   const meta = STEER[action] || STEER.note;
   const recipients = recipientPicker(to || defaultRecipients(item));
   const note = h('textarea.textarea', {
     rows: 3, placeholder: placeholder(action, item), style: { minHeight: '70px' },
   });
+  note.value = text;
   const send = async () => {
     try {
       await write.create('steer', {

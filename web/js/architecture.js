@@ -236,7 +236,7 @@ export function createArchitecture() {
     if (!targets.length) { setChildren(body, h('div.empty', h('span.hand', 'No targets yet'), 'Add a target and its architecture appears here.')); return; }
     if (body.querySelector(':scope > .empty')) body.replaceChildren();
     keyed(body, targets, (t) => t.id, (t) => {
-      const el = h('div.arch-block', h('div.arch-head'), h('div.arch-grid', h('div.arch-main'), h('div.arch-side')));
+      const el = h('div.arch-block', h('div.arch-head'), h('div.arch-gaps'), h('div.arch-grid', h('div.arch-main'), h('div.arch-side')));
       el.dataset.target = t.id;
       return el;
     }, (el, t) => {
@@ -247,6 +247,19 @@ export function createArchitecture() {
         h('h2', t.name), h('span.pill', t.protocolType),
         h('span.meta', `${comps.filter((c) => c.type !== 'actor' && c.type !== 'external').length} parts · ${comps.filter((c) => c.type === 'actor').length} actors · ${comps.filter((c) => c.type === 'external').length} external · ${rels.length} connections`),
         phaseStepper(t));
+      // parts with no connection: the diagram cannot say what they talk to
+      const linked = new Set(rels.flatMap((r) => [r.from, r.to]));
+      const loose = comps.filter((c) => !linked.has(c.id));
+      const gaps = el.querySelector('.arch-gaps');
+      if (!loose.length) gaps.replaceChildren();
+      else {
+        setChildren(gaps, h('div.gap-banner',
+          h('div', h('b', `${loose.length} of ${comps.length} parts are not connected to anything yet`), h('div.gap-names', loose.slice(0, 12).map((c) => c.name).join(', '), loose.length > 12 ? ', ...' : ''),
+            h('div.gap-why', rels.length ? 'Until they are, the map cannot show what they call or what can reach them.' : 'No connections at all: an agent can draw most of them straight from the source with recon scan.')),
+          h('div.gap-acts',
+            h('button.btn.btn-sm.btn-primary', { on: { click: (e) => openSteerComposer(e.currentTarget, { item: t, action: 'cover', to: ['all'], text: `Map how these connect to the rest of ${t.name} (run recon scan on the source first, then recon map for what it cannot see): ${loose.map((c) => c.name).join(', ')}` }) } }, icon('send'), 'Ask an agent to map these'),
+            h('button.btn.btn-sm', { on: { click: () => addRelation(t) } }, icon('link'), 'Add connection'))));
+      }
       const pick = picked.get(t.id);
       const mapSig = `${comps.map((c) => `${c.id}:${c.updatedAt}`).join()}|${rels.map((r) => `${r.id}:${r.updatedAt}`).join()}|${pick}|${document.documentElement.dataset.theme}`;
       const main = el.querySelector('.arch-main');

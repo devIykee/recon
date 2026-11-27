@@ -382,8 +382,11 @@ export class Store extends EventEmitter {
     const ps = phaseStatus(this.state, target.id);
     if (order.indexOf(next) >= order.indexOf('assumptions')) {
       const code = ps.components - ps.actors - ps.externals;
-      if (code < 1 || ps.relations < Math.max(1, Math.ceil(ps.components / 2))) {
-        throw new ValidationError(`finish the map first: ${ps.components} parts but only ${ps.relations} connections. Add the actors and external dependencies, and how the parts call, transfer to, read from and own each other.`);
+      const comps = Object.values(this.state.items.component).filter((c) => c.targetId === target.id);
+      const linked = new Set(Object.values(this.state.items.relation).filter((r) => r.targetId === target.id).flatMap((r) => [r.from, r.to]));
+      const loose = comps.filter((c) => !linked.has(c.id));
+      if (code < 1 || ps.relations < Math.max(1, Math.ceil(ps.components / 2)) || loose.length > Math.floor(comps.length / 5)) {
+        throw new ValidationError(`finish the map first: ${ps.components} parts, ${ps.relations} connections${loose.length ? `, and these are not connected to anything: ${loose.slice(0, 8).map((c) => c.name).join(', ')}` : ''}. Show how the parts call, transfer to, read from, own and trust each other (recon_scan does most of it from the source).`);
       }
     }
     if (order.indexOf(next) >= order.indexOf('hunting') && ps.developerAssumptions < 1) {

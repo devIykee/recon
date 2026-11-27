@@ -83,7 +83,10 @@ test('agents cannot skip the map or the developers\' assumptions; humans can', (
   const c1 = s.create('component', { targetId: t.id, name: 'Vault.deposit()' }, a.id);
   assert.throws(() => s.patch('target', t.id, { phase: 'hunting' }, a.id), /finish the map/);
   const u = s.create('component', { targetId: t.id, name: 'User', type: 'actor' }, a.id);
+  const loose = s.create('component', { targetId: t.id, name: 'Vault.withdraw()' }, a.id);
   s.create('relation', { targetId: t.id, from: u.id, to: c1.id, type: 'calls' }, a.id);
+  assert.throws(() => s.patch('target', t.id, { phase: 'assumptions' }, a.id), /not connected to anything: Vault.withdraw/);
+  s.create('relation', { targetId: t.id, from: u.id, to: loose.id, type: 'calls' }, a.id);
   assert.throws(() => s.patch('target', t.id, { phase: 'hunting' }, a.id), /developers assume/);
   s.patch('target', t.id, { phase: 'assumptions' }, a.id);
   s.create('assumption', { text: 'asset is a plain ERC20', targetId: t.id, origin: 'developer', category: 'input' }, a.id);

@@ -33,6 +33,7 @@ write (as the human, or as an agent with --as NAME)
   recon add target <name> [--type lending] [--chain mainnet] [--components "A(),B()"]
   recon add component <name> --target <target> [--type function] [--summary ...] [--location path:line]
   recon add actor|external <name> [--summary ...]          people/roles, and dependencies like tokens and oracles
+  recon scan [folder] --target T [--dry] map the Solidity source: contracts, who calls what, transfers, roles
   recon relate <from> <to> <calls|reads|writes|transfers|mints|owns|configures|trusts|delegates|inherits> [label]
   recon phase <target> <mapping|assumptions|hunting|reporting>
   recon add assumption <text> [--origin developer|agent] [--category trust|invariant|input|external|economic]
@@ -371,6 +372,25 @@ async function onlyTarget(api) {
   return ts.length === 1 ? ts[0].id : undefined;
 }
 
+async function scan() {
+  const { scanSolidity } = await import('../src/scan.js');
+  const root = path.resolve(pos[0] || '.');
+  const map = scanSolidity(root, { includeTests: Boolean(flags.tests) });
+  if (!map.files.length) throw new ReconError(2, `no .sol files under ${root}`);
+  if (flags.dry || !flags.target) {
+    out(map, () => [
+      `${bold('scanned')} ${map.files.length} file(s): ${map.files.join(', ')}`,
+      '', bold(`parts (${map.components.length})`), ...map.components.map((c) => `  ${dim(c.type.padEnd(9))} ${c.name}  ${dim(c.summary)}`),
+      '', bold(`connections (${map.relations.length})`), ...map.relations.map((r) => `  ${r.from} ${tint(r.type)} ${r.to}${r.label ? dim(`  ${r.label}`) : ''}`),
+      ...(flags.target ? [] : ['', dim('add --target "<name>" to put this on the board')]),
+    ].join('\n'));
+    return;
+  }
+  const { applyMap } = await import('../src/mapping.js');
+  const r = await applyMap(client(), flags.target, map);
+  out(r, () => `mapped ${r.components} parts and ${r.relations} connections from ${map.files.length} file(s)${r.unconnected.length ? `\nnot connected yet: ${r.unconnected.join(', ')}` : ''}${r.errors.length ? `\n${COLORS.flagged(r.errors.join('\n'))}` : ''}`);
+}
+
 async function relate() {
   const api = client();
   const from = (await api.resolve(need(pos[0], 'from component'), 'component')).item;
@@ -660,7 +680,7 @@ const COMMANDS = {
   steers, ack: () => steerVerb('ack'), address: () => steerVerb('address'), steer,
   verify: () => verdict('verified'), dispute: () => verdict('disputed'), unverify: () => verdict('unverified'),
   accept: () => decide('accept'), decline: () => decide('decline'),
-  setup, agent: agentCmd, start, relate, phase, ready, report, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
+  setup, agent: agentCmd, start, scan, relate, phase, ready, report, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
 };
 
 async function main() {

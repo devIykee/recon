@@ -11,6 +11,7 @@ import { createClient, defaultUrl, ReconError } from './client.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ENUMS } from './model.js';
+import { applyMap } from './mapping.js';
 
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
@@ -118,28 +119,22 @@ export const TOOLS = [
       required: ['target'],
     },
     run: async (c, a) => {
-      const t = (await c.resolve(a.target, 'target')).item;
-      const existing = (await c.list('component', { targetId: t.id }));
-      const byName = new Map(existing.map((x) => [x.name.toLowerCase(), x]));
-      const out = { components: 0, relations: 0, errors: [] };
-      for (const comp of a.components || []) {
-        try {
-          const cur = byName.get(comp.name.toLowerCase());
-          const fields = pick(comp, ['type', 'summary', 'location']);
-          const actorLike = comp.type === 'actor' || comp.type === 'external';
-          const item = cur ? await c.update('component', cur.id, fields) : await c.create('component', { ...comp, targetId: t.id, ...(actorLike ? { reviewState: 'reviewed' } : {}) });
-          byName.set(item.name.toLowerCase(), item);
-          out.components++;
-        } catch (err) { out.errors.push(`${comp.name}: ${err.message}`); }
-      }
-      for (const r of a.relations || []) {
-        const from = byName.get(String(r.from).toLowerCase());
-        const to = byName.get(String(r.to).toLowerCase());
-        if (!from || !to) { out.errors.push(`relation ${r.from} -> ${r.to}: add both components first`); continue; }
-        try { await c.create('relation', { targetId: t.id, from: from.id, to: to.id, type: r.type || 'calls', label: r.label || '' }); out.relations++; } catch (err) { out.errors.push(`${r.from} -> ${r.to}: ${err.message}`); }
-      }
-      const total = await c.list('relation', { targetId: t.id });
-      return { ...out, mapSize: { components: byName.size, relations: total.length }, phase: t.phase, next: t.phase === 'mapping' ? 'When the map is complete, call recon_phase with phase "assumptions".' : undefined };
+      const r = await applyMap(c, a.target, a);
+      return { ...r, next: r.unconnected.length ? `Not connected to anything yet: ${r.unconnected.join(', ')}. Add how they call, transfer to, read from, own or trust the rest.` : r.phase === 'mapping' ? 'When the map is complete, call recon_phase with phase "assumptions".' : undefined };
+    },
+  },
+  {
+    name: 'recon_scan',
+    description: 'Phase 1 shortcut: read the Solidity source in this project and put a first architecture map on the board: contracts, inheritance, which contract calls which (with function names), token transfers, reads, low-level calls back to the caller, calls to arbitrary addresses, and who may call what (onlyX modifiers, require(msg.sender == x), unrestricted functions). Then refine it with recon_map: add what the scan cannot see (off-chain actors, trust, intent).',
+    inputSchema: { type: 'object', properties: { target: str('Target id or name'), path: str('Folder with the .sol files (default: this project)'), includeTests: { type: 'boolean' } }, required: ['target'] },
+    run: async (c, a, ctx = {}) => {
+      if (!ctx.canWriteFiles) return { error: 'this connection cannot read your files; run `recon scan <folder> --target <name>` on your machine instead' };
+      const { scanSolidity } = await import('./scan.js');
+      const root = path.resolve(ctx.cwd || process.cwd(), a.path || '.');
+      const map = scanSolidity(root, { includeTests: a.includeTests });
+      if (!map.files.length) return { error: `no .sol files under ${root}` };
+      const r = await applyMap(c, a.target, map);
+      return { scanned: map.files, found: { parts: map.components.length, connections: map.relations.length }, ...r };
     },
   },
   {
@@ -404,7 +399,7 @@ export const TOOLS = [
 const INSTRUCTIONS = `recon: a shared board where you and a human research vulnerabilities together.
 1. Call recon_briefing first, and again between tasks. Do its mustDo list top to bottom.
 2. Acknowledge every open steer at once (recon_steer). Until you do, findings, coverage and focus writes are refused.
-3. Work each target in order: map it (recon_map), record the developers' assumptions, then hunt.
+3. Work each target in order: map it (recon_scan, then recon_map for what the scan cannot see), record the developers' assumptions, then hunt.
 4. Every claim needs evidence. Findings need a complete confirmation card and earned severity.
 5. Never leave loose ends in chat: record open threads with recon_add_lead and choices with recon_propose options.
 Never set verification or priority; those belong to the human.`;

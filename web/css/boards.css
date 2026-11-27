@@ -439,6 +439,12 @@
   .arch-grid { grid-template-columns: 1fr; }
 }
 
+.gap-banner { display: flex; gap: 14px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 12px 14px; margin-bottom: 12px; border-radius: 12px; background: color-mix(in srgb, var(--warn) 9%, var(--island)); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); font-size: 13px; }
+.gap-banner b { color: var(--warn); font-weight: 650; }
+.gap-names { color: var(--text); margin-top: 3px; font-size: 12.5px; }
+.gap-why { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.gap-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+
 /* ---------- plain-language story at the top of every detail ---------- */
 
 .story { padding: 12px 0 6px; }
