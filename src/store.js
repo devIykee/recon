@@ -423,6 +423,12 @@ function docItems(doc) {
     const list = doc[plural[kind]] || doc[kind];
     if (Array.isArray(list)) out[kind] = list;
   }
+  // Items without ids get a stable id from their content, so rewriting the same file is idempotent.
+  const prefix = { assumption: 'as', hypothesis: 'hy', finding: 'fd', steer: 'st', proposal: 'pr' };
+  for (const [kind, p] of Object.entries(prefix)) {
+    if (!Array.isArray(out[kind])) continue;
+    out[kind] = out[kind].map((it) => (it && !it.id && (it[TITLE_FIELD[kind]]) ? { ...it, id: stableId(p, it[TITLE_FIELD[kind]]) } : it));
+  }
   // Allow components nested in targets: {targets: [{name, components: [...]}]}
   if (Array.isArray(out.target)) {
     out.component = out.component || [];
@@ -434,6 +440,11 @@ function docItems(doc) {
     });
   }
   return out;
+}
+
+function stableId(prefix, text) {
+  const h = crypto.createHash('sha1').update(String(text)).digest('hex').slice(0, 8);
+  return `${prefix}_${slug(text).slice(0, 24)}_${h}`;
 }
 
 export function normalizeState(doc) {
