@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { spawnSync } from 'node:child_process';
 import { installCopy, reconHome, ensureHub, isLocalUrl } from './launch.js';
 import { ROOT, DEFAULT_PORT } from './config.js';
 
@@ -73,18 +74,29 @@ async function restartHub({ url, key, bin, log }) {
   if (!isLocalUrl(url)) return { restarted: false, why: 'the board is not on this machine' };
   const headers = { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) };
   let was = false;
+  let running = false;
+  try { running = (await fetch(`${url}/api/health`, { headers, signal: AbortSignal.timeout(1500) })).ok; } catch { /* not running */ }
+  if (!running) return { restarted: false, why: 'no board was running; it starts on the new version the next time an agent needs it' };
   try {
     const res = await fetch(`${url}/api/shutdown`, { method: 'POST', headers, body: '{}', signal: AbortSignal.timeout(5000) });
     was = res.ok;
     if (!res.ok && res.status !== 404) log(`recon: the board did not stop (${res.status}); restart it yourself to load the update`);
-  } catch { /* not running */ }
+  } catch { /* stopped mid-request */ }
+  // A board from before updates existed has no shutdown route: stop the process
+  // started from this install (it saves on SIGTERM).
+  if (!was && process.platform !== 'win32') {
+    const app = path.join(reconHome(), 'app', 'bin', 'recon.js');
+    const r = spawnSync('pkill', ['-TERM', '-f', `${app} serve`]);
+    was = r.status === 0;
+    if (!was) return { restarted: false, why: 'the board running is an older one that could not be stopped: close it (or reboot) and it starts on the new version next time' };
+  }
   if (was) {
     for (let i = 0; i < 40; i++) {
       await new Promise((r) => setTimeout(r, 150));
       try { await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(500) }); } catch { break; }
     }
   }
-  if (!was) return { restarted: false, why: 'no board was running' };
+  if (!was) return { restarted: false, why: 'the board could not be stopped: close it and it starts on the new version next time' };
   await ensureHub({ url, key, bin });
   return { restarted: true };
 }
