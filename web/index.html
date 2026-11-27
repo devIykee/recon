@@ -1,1 +1,86 @@
-<!doctype html><title>recon</title>
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>recon</title>
+  <meta name="description" content="A shared cockpit where you and your agents hunt vulnerabilities together.">
+  <meta name="color-scheme" content="dark light">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="/fonts/excalifont-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/inter-latin-var.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/css/app.css">
+  <link rel="stylesheet" href="/css/map.css">
+  <link rel="stylesheet" href="/css/boards.css">
+</head>
+<body>
+  <div id="app" class="app">
+    <div id="stage" class="stage" tabindex="-1" aria-label="Project map">
+      <div id="world" class="world">
+        <svg id="edges" class="edges" aria-hidden="true"></svg>
+        <div id="nodes" class="nodes"></div>
+        <div id="markers" class="markers"></div>
+        <div id="expand-layer" class="expand-layer"></div>
+      </div>
+    </div>
+
+    <main id="board" class="board" hidden></main>
+
+    <header class="hud">
+      <div class="hud-left">
+        <div class="island row">
+          <button class="tool" id="menu-btn" aria-label="Menu" aria-haspopup="menu" data-tip="Menu"></button>
+        </div>
+        <div class="island project-title">
+          <input id="project-name" class="title-input" aria-label="Project name" spellcheck="false" maxlength="120">
+          <span id="example-pill" class="pill pill-example" hidden>example</span>
+        </div>
+      </div>
+
+      <nav class="island toolbar hud-center" id="views" aria-label="Views"></nav>
+
+      <div class="hud-right">
+        <div class="island live" id="live" aria-live="polite">
+          <span class="live-dot"></span><span class="live-text">connecting</span>
+        </div>
+        <div class="avatars" id="presence"></div>
+        <button class="btn btn-primary" id="connect-btn">
+          <span class="icon" data-icon="plug"></span><span>Connect agent</span>
+        </button>
+        <div class="island row">
+          <button class="tool" id="sidebar-btn" aria-label="Toggle side panel" data-tip="Side panel ( [ )"></button>
+        </div>
+      </div>
+    </header>
+
+    <aside id="sidebar" class="sidebar island" aria-label="Activity, steers and next moves"></aside>
+
+    <div class="hud-bottom-left">
+      <div class="island row zoom" id="zoom">
+        <button class="tool sm" data-zoom="out" aria-label="Zoom out" data-tip="Zoom out ( - )"></button>
+        <button class="zoom-value" data-zoom="reset" aria-label="Reset zoom" data-tip="Reset zoom">100%</button>
+        <button class="tool sm" data-zoom="in" aria-label="Zoom in" data-tip="Zoom in ( + )"></button>
+      </div>
+      <div class="island row">
+        <button class="tool sm" data-zoom="fit" aria-label="Fit everything" data-tip="Fit everything ( F )"></button>
+      </div>
+    </div>
+
+    <div class="hud-bottom-right">
+      <div class="island row">
+        <button class="tool sm" id="theme-btn" aria-label="Toggle theme" data-tip="Light / dark"></button>
+        <button class="tool sm" id="help-btn" aria-label="Help and glossary" data-tip="Help & glossary ( ? )"></button>
+      </div>
+    </div>
+
+    <div id="hint" class="hint"></div>
+    <div id="banner" class="banner" hidden></div>
+    <div id="toasts" class="toasts" aria-live="polite"></div>
+    <div id="modal-root"></div>
+    <div id="popover-root"></div>
+    <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+  </div>
+  <noscript>recon needs JavaScript to draw the board.</noscript>
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>
