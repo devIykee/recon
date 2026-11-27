@@ -2,19 +2,20 @@
 // and what to do next (agent proposals + recon's suggestions).
 
 import { h, icon, keyed, setChildren, timeEl, toast, plural } from './ui.js';
-import { live, list, byId, titleOf, authorName, post, write } from './state.js';
-import { STEER, STEER_STATE, ACTION_LABEL, KIND_ICON } from './labels.js';
+import { live, list, byId, titleOf, authorName, post, write, get, patch, healthOf } from './state.js';
+import { STEER, STEER_STATE, ACTION_LABEL, KIND_ICON, LEAD_STATE, VALUE } from './labels.js';
 import { authorAvatar, openSteerComposer } from './steer.js';
 import { bus } from './bus.js';
 
 const TABS = [
+  { id: 'next', label: 'For you', icon: 'sparkle' },
   { id: 'activity', label: 'Activity', icon: 'activity' },
   { id: 'steers', label: 'Steers', icon: 'flag' },
-  { id: 'next', label: 'Next', icon: 'compass' },
+  { id: 'threads', label: 'Threads', icon: 'compass' },
 ];
 
 export function createSidebar(root) {
-  let tab = load() || 'activity';
+  let tab = load() || 'next';
   const tabsEl = h('div.tabs', { role: 'tablist' });
   const panels = Object.fromEntries(TABS.map((t) => [t.id, h('div.tab-panel', { role: 'tabpanel', hidden: t.id !== tab })]));
   root.append(tabsEl, ...Object.values(panels));
@@ -31,8 +32,9 @@ export function createSidebar(root) {
   function renderTabs() {
     const openSteers = list('steer', (s) => s.state === 'open').length;
     const pending = list('proposal', (p) => p.state === 'pending').length;
-    const counts = { activity: null, steers: list('steer', (s) => s.state !== 'addressed').length, next: pending + (live.state?.suggestions.length || 0) };
-    const hot = { steers: openSteers > 0, next: pending > 0 };
+    const cards = forYouCards();
+    const counts = { activity: null, steers: list('steer', (s) => s.state !== 'addressed').length, next: cards.length + pending, threads: list('lead', (l) => l.state === 'open' || l.state === 'blocked').length };
+    const hot = { steers: openSteers > 0, next: pending > 0 || cards.some((c) => c.hot) };
     setChildren(tabsEl, ...TABS.map((t) => h('button.tab', {
       role: 'tab', 'aria-selected': String(tab === t.id), on: { click: () => select(t.id) },
     }, icon(t.icon), t.label, counts[t.id] ? h(`span.n${hot[t.id] ? '.hot' : ''}`, counts[t.id]) : null)));
@@ -117,16 +119,98 @@ export function createSidebar(root) {
         h('span.t', authorName(s.createdBy), ' · ', timeEl(s.createdAt))));
   }
 
-  // ---------- next ----------
+  // ---------- for you: proactive cards with one-click answers ----------
+
+  let reportInfo = null;
+  let reportTimer = null;
+  function refreshReport() {
+    clearTimeout(reportTimer);
+    reportTimer = setTimeout(async () => {
+      try { reportInfo = await get('/api/report'); render(); } catch { /* not critical */ }
+    }, 700);
+  }
+
+  function forYouCards() {
+    if (!live.state) return [];
+    const cards = [];
+    const rep = reportInfo;
+    const cfg = live.state.project.report || {};
+    if (rep && rep.included.length && !cfg.shape) {
+      cards.push({
+        key: 'report-shape', hot: true, icon: 'file',
+        title: `${rep.included.length} finding(s) are ready to report. How should they go out?`,
+        why: 'Pick once. The agent writes the report that way instead of drafting it in chat. Programs that want one bug per submission need separate reports.',
+        actions: [
+          { label: 'One combined document', primary: true, run: () => patch('/api/report', { shape: 'combined' }) },
+          { label: 'One report per finding', run: () => patch('/api/report', { shape: 'separate' }) },
+          { label: 'Open report', run: () => bus.report?.() },
+        ],
+      });
+    }
+    const lastChange = Math.max(0, ...list('finding').map((f) => f.updatedAt));
+    if (cfg.shape && cfg.last && cfg.last.at < lastChange && rep?.included.length) {
+      cards.push({ key: 'report-stale', icon: 'file', title: 'Findings changed since the report was written', why: `The ${cfg.shape} report is out of date.`, actions: [{ label: 'Open report', primary: true, run: () => bus.report?.() }] });
+    }
+    for (const a of list('agent')) {
+      const hl = healthOf(a.id);
+      if (!hl.flags.includes('ignoring-steers')) continue;
+      const waiting = list('steer', (s) => s.state === 'open' && ((s.to || []).includes(a.id) || (s.to || []).includes('all')));
+      cards.push({
+        key: `ignoring-${a.id}`, hot: true, icon: 'alert', who: a.id,
+        title: `${a.name} has not acknowledged ${waiting.length} steer(s)`,
+        why: `It cannot file findings or change coverage until it does. Oldest: "${(waiting[0]?.note || '').slice(0, 80)}"`,
+        actions: [{ label: 'See steers', run: () => select('steers') }],
+      });
+    }
+    for (const f of list('finding')) {
+      const missing = ['attacker', 'reachability', 'bound', 'liveFunds', 'alreadyReported', 'verificationMethod'].filter((k) => !f[k]);
+      if (!missing.length) continue;
+      const who = f.createdBy?.startsWith('ag_') ? f.createdBy : null;
+      cards.push({
+        key: `card-${f.id}`, icon: 'shield', who,
+        title: `"${f.title}" has no confirmation card yet`,
+        why: `Missing ${missing.join(', ')}. Its ${f.severity} rating is a guess until they are answered.`,
+        actions: [
+          who ? { label: `Ask ${authorName(who)} to finish it`, primary: true, run: () => write.create('steer', { action: 'verify', itemId: f.id, itemKind: 'finding', to: [who], note: `Finish the confirmation card: ${missing.join(', ')}.` }) } : null,
+          { label: 'Look', run: () => bus.open(f.id) },
+        ].filter(Boolean),
+      });
+    }
+    for (const hyp of list('hypothesis', (x) => x.exploitStage === 'capability' && x.status !== 'dropped')) {
+      if (list('steer', (s) => s.itemId === hyp.id && s.state !== 'addressed').length) continue;
+      const who = hyp.createdBy?.startsWith('ag_') ? hyp.createdBy : null;
+      cards.push({
+        key: `trigger-${hyp.id}`, icon: 'zap', who,
+        title: `Capability without a trigger: ${hyp.text.slice(0, 90)}`,
+        why: 'Not a bug yet. It becomes one if a public path makes it fire. Worth hunting?',
+        actions: [
+          { label: 'Yes, hunt the trigger', primary: true, run: () => write.create('steer', { action: 'cover', itemId: hyp.id, itemKind: 'hypothesis', to: who ? [who] : ['all'], note: 'Hunt the trigger: which public function, callback or forwarded calldata makes this fire?' }) },
+          { label: 'No, drop it', run: () => write.update('hypothesis', hyp.id, { status: 'dropped', dropReason: 'capability without a reachable trigger' }) },
+        ],
+      });
+    }
+    return cards;
+  }
+
+  function cardEl(c) {
+    return h('div.sug.foryou', { 'data-hot': String(Boolean(c.hot)) },
+      h('div.sug-title', c.who ? authorAvatar(c.who) : icon(c.icon), h('span', c.title)),
+      c.why ? h('div.sug-why', c.why) : null,
+      h('div.sug-actions', ...c.actions.map((a) => h(`button.btn.btn-xs${a.primary ? '.btn-primary' : ''}`, {
+        on: { click: async () => { try { await a.run(); } catch (err) { toast(err.message, 'error'); } } },
+      }, a.label))));
+  }
 
   function renderNext() {
     const p = panels.next;
     if (!p.firstChild) {
-      p.append(h('div.panel-head', h('h3', 'Where to look next')),
-        h('div.panel-sub', 'Proposals from your agents wait for a quick yes or no. Suggestions come from what is still untouched, unverified, or a usual suspect for this kind of protocol.'),
-        h('div.group-label.prop-label', icon('sparkle'), 'Agent proposals'), h('div.props-list'),
+      p.append(h('div.panel-head', h('h3', 'For you')),
+        h('div.panel-sub', 'Decisions waiting on you, agents that need a nudge, and where to look next. One click each.'),
+        h('div.group-label.prop-label', icon('sparkle'), 'Agents are asking'), h('div.props-list'),
+        h('div.group-label.card-label', icon('alert'), 'Needs your call'), h('div.cards-list'),
         h('div.group-label', icon('compass'), 'Suggested by recon'), h('div.sug-list'));
     }
+    if (!reportInfo) refreshReport();
     const proposals = list('proposal').sort((a, b) => (a.state === 'pending' ? -1 : 1) - (b.state === 'pending' ? -1 : 1) || b.createdAt - a.createdAt).slice(0, 10);
     p.querySelector('.prop-label').hidden = !proposals.length;
     keyed(p.querySelector('.props-list'), proposals, (x) => x.id, () => {
@@ -138,15 +222,27 @@ export function createSidebar(root) {
       el._v = x.updatedAt;
       el.classList.toggle('decided', x.state !== 'pending');
       const item = byId(x.itemId);
+      const options = (x.options || []).filter(Boolean);
       setChildren(el,
-        h('div.sug-title', authorAvatar(x.createdBy), h('span', h('b', authorName(x.createdBy)), ' proposes: ', x.text)),
+        h('div.sug-title', authorAvatar(x.createdBy), h('span', h('b', authorName(x.createdBy)), options.length ? ' asks: ' : ' proposes: ', x.text)),
         x.rationale ? h('div.sug-why', x.rationale) : null,
         item ? h('div.sug-why', h('span.steer-item', { on: { click: () => bus.open(item.id) } }, icon(KIND_ICON[item.kind]), titleOf(item))) : null,
         x.state === 'pending'
-          ? h('div.sug-actions',
-            h('button.btn.btn-xs.btn-primary', { on: { click: () => decide(x, 'accept') } }, icon('check'), 'Yes, go'),
-            h('button.btn.btn-xs', { on: { click: () => decide(x, 'decline') } }, icon('x'), 'No'))
-          : h('div.sug-actions', h(`span.state-pill.${x.state === 'accepted' ? 'addressed' : 'open'}`, x.state)));
+          ? h('div.sug-actions.options',
+            ...(options.length
+              ? options.map((o, i) => h(`button.btn.btn-xs${i === 0 ? '.btn-primary' : ''}`, { on: { click: () => decide(x, 'accept', o) } }, o))
+              : [h('button.btn.btn-xs.btn-primary', { on: { click: () => decide(x, 'accept') } }, icon('check'), 'Yes, go')]),
+            h('button.btn.btn-xs', { on: { click: () => decide(x, 'decline') } }, icon('x'), options.length ? 'None of these' : 'No'))
+          : h('div.sug-actions', h(`span.state-pill.${x.state === 'accepted' ? 'addressed' : 'open'}`, x.state), x.choice ? h('span.verify-note', x.choice) : null));
+    });
+
+    const cards = forYouCards();
+    p.querySelector('.card-label').hidden = !cards.length;
+    keyed(p.querySelector('.cards-list'), cards, (c) => c.key, (c) => cardEl(c), (el, c) => {
+      const sig = `${c.title}|${c.why}`;
+      if (el._sig === sig) return;
+      el._sig = sig;
+      el.replaceWith(cardEl(c));
     });
 
     const sug = live.state.suggestions || [];
@@ -162,14 +258,56 @@ export function createSidebar(root) {
           s.itemId ? h('button.btn.btn-xs', { on: { click: () => bus.open(s.itemId) } }, icon('eye'), 'Look') : null,
           h('button.btn.btn-xs.btn-ghost', { on: { click: () => post(`/api/suggestions/${s.id}/dismiss`).catch((e) => toast(e.message, 'error')) } }, 'Dismiss')));
     });
-    if (!sug.length && !proposals.length && !p.querySelector('.empty')) p.append(h('div.empty', h('span.hand', 'All clear'), 'Nothing obviously left. Add components or hypotheses to get new suggestions.'));
-    else if (sug.length || proposals.length) p.querySelector('.empty')?.remove();
+    if (!sug.length && !proposals.length && !cards.length && !p.querySelector('.empty')) p.append(h('div.empty', h('span.hand', 'All clear'), 'Nothing needs you right now.'));
+    else if (sug.length || proposals.length || cards.length) p.querySelector('.empty')?.remove();
   }
 
-  async function decide(x, verb) {
+  // ---------- threads: what is left, so nothing is forgotten ----------
+
+  function renderThreads() {
+    const p = panels.threads;
+    if (!p.firstChild) {
+      p.append(h('div.panel-head', h('h3', 'Open threads'),
+        h('button.btn.btn-sm', { on: { click: () => bus.newItem('lead') } }, icon('plus'), 'New')),
+      h('div.panel-sub', 'Work worth doing that is not done yet: blocked checks, follow-ups, "what is left if we keep hunting". Agents record these before they stop.'),
+      h('div.thread-groups'));
+    }
+    const all = list('lead').sort((a, b) => ({ high: 0, med: 1, low: 2 }[a.value] - { high: 0, med: 1, low: 2 }[b.value]) || b.updatedAt - a.updatedAt);
+    const groups = ['open', 'blocked', 'done', 'dropped'];
+    keyed(p.querySelector('.thread-groups'), groups, (g) => g, (g) => h('div', h('div.group-label'), h('div.thread-list')), (el, g) => {
+      const xs = all.filter((l) => l.state === g).slice(0, g === 'done' || g === 'dropped' ? 10 : 50);
+      el.hidden = !xs.length;
+      setChildren(el.querySelector('.group-label'), LEAD_STATE[g].label, h('span', `· ${xs.length}`));
+      keyed(el.querySelector('.thread-list'), xs, (l) => l.id, () => h('div.thread'), (card, l) => {
+        if (card._v === l.updatedAt) return;
+        card._v = l.updatedAt;
+        card.dataset.value = l.value;
+        const rel = byId(l.itemId) || byId(l.componentId);
+        setChildren(card,
+          h('div.steer-top', h(`span.chip.value-${l.value}`, VALUE[l.value]), h('span.right', authorAvatar(l.createdBy))),
+          h('div.steer-note', l.text),
+          l.why ? h('div.sug-why', { style: { margin: '4px 0 0' } }, l.why) : null,
+          l.blockedBy ? h('div.steer-response', icon('alert'), `Blocked: ${l.blockedBy}`) : null,
+          l.nextStep ? h('div.steer-response', icon('arrow'), `Next: ${l.nextStep}`) : null,
+          l.outcome ? h('div.steer-response', icon('check'), l.outcome) : null,
+          rel ? h('div.steer-item', { on: { click: () => bus.open(rel.id) } }, icon(KIND_ICON[rel.kind]), titleOf(rel)) : null,
+          h('div.steer-foot',
+            l.state === 'open' || l.state === 'blocked'
+              ? [h('button.btn.btn-xs', { on: { click: (e) => openSteerComposer(e.currentTarget, { item: l, action: 'cover', to: ['all'] }) } }, icon('send'), 'Steer at it'),
+                h('button.btn.btn-xs.btn-ghost', { on: { click: () => write.update('lead', l.id, { state: 'done' }).catch((er) => toast(er.message, 'error')) } }, 'Done'),
+                h('button.btn.btn-xs.btn-ghost', { on: { click: () => write.update('lead', l.id, { state: 'dropped' }).catch((er) => toast(er.message, 'error')) } }, 'Drop')]
+              : h('button.btn.btn-xs.btn-ghost', { on: { click: () => write.update('lead', l.id, { state: 'open' }).catch((er) => toast(er.message, 'error')) } }, 'Reopen'),
+            h('span.t', timeEl(l.updatedAt))));
+      });
+    });
+    if (!all.length && !p.querySelector('.empty')) p.append(h('div.empty', h('span.hand', 'No open threads'), 'When an agent stops, it leaves what is left here.'));
+    else if (all.length) p.querySelector('.empty')?.remove();
+  }
+
+  async function decide(x, verb, choice) {
     try {
-      await post(`/api/proposals/${x.id}/${verb}`);
-      toast(verb === 'accept' ? `${authorName(x.createdBy)} gets the go-ahead.` : 'Declined.', 'ok');
+      await post(`/api/proposals/${x.id}/${verb}`, choice ? { choice } : {});
+      toast(verb === 'accept' ? `${authorName(x.createdBy)}: ${choice || 'go ahead'}` : 'Declined.', 'ok');
     } catch (err) { toast(err.message, 'error'); }
   }
 
@@ -186,9 +324,10 @@ export function createSidebar(root) {
     if (tab === 'activity') renderActivity();
     if (tab === 'steers') renderSteers();
     if (tab === 'next') renderNext();
+    if (tab === 'threads') renderThreads();
   }
 
-  return { render, select, get tab() { return tab; }, plural };
+  return { render, select, refreshReport, get tab() { return tab; }, plural };
 }
 
 function load() {

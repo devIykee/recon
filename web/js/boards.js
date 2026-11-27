@@ -278,7 +278,21 @@ export function createBoards(root) {
     section('head', head('Findings', 'bug',
       'Confirmed bugs on their way from recon to responsible disclosure. Drag a card to move it along.',
       [bounty ? h('span.pill', `$${bounty.toLocaleString()} in bounties`) : null,
+        h('button.btn', { on: { click: () => bus.report?.() } }, icon('file'), 'Report'),
         h('button.btn.btn-primary', { on: { click: () => bus.newItem('finding') } }, icon('plus'), 'Add finding')]));
+    section('chains', (el) => {
+      const chains = list('chain');
+      const sig = chains.map((c) => `${c.id}:${c.updatedAt}`).join();
+      if (el.dataset.sig === sig) return;
+      el.dataset.sig = sig;
+      if (!chains.length) { el.replaceChildren(); return; }
+      setChildren(el, h('div.group-label', icon('link'), `Chains · ${chains.length}`, h('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0 } }, '— weaker issues that combine into a stronger one')),
+        h('div.chains', ...chains.map((c) => h('div.chain-card', { style: { '--c': SEVERITY[c.severity].color }, on: { click: () => bus.open(c.id) } },
+          h('h4', c.title),
+          h('div.chain-parts', ...(c.parts || []).map((id, i) => [i ? h('span.plus', '+') : null, h('span.part', titleOf(byId(id)) || id)])),
+          h('div.card-sub', `${c.result || ''}`),
+          h('div.card-foot', h('span.sev', { style: { '--c': SEVERITY[c.severity].color } }, SEVERITY[c.severity].label), h('span', `glue: ${c.glue}${c.gluePermissionless ? ' (attacker-controlled)' : ''}`))))));
+    });
     section('filters', (el) => setChildren(el, h('div.filters',
       h('button.filter', { 'aria-pressed': String(filters.findings === 'all'), on: { click: () => { filters.findings = 'all'; render(); } } }, `All · ${all.length}`),
       ...Object.entries(SEVERITY).map(([k, m]) => h('button.filter', {
@@ -312,7 +326,11 @@ export function createBoards(root) {
           h('div.card-top', h('span.sev', { style: { '--c': SEVERITY[f.severity].color } }, SEVERITY[f.severity].label), f.bugClass ? h('span.chip', f.bugClass) : null,
             h('span.right', steerBadge(f), verBadge(f))),
           h('div.card-title', f.title),
-          h('div.card-sub', f.repro ? 'Reproduction attached' : 'No reproduction yet'),
+          h('div.card-sub', (() => {
+            const missing = ['attacker', 'reachability', 'bound', 'liveFunds', 'alreadyReported', 'verificationMethod'].filter((k) => !f[k]);
+            if (missing.length) return `Card incomplete: ${missing.join(', ')}`;
+            return `${f.attacker} · ${f.reachability}${f.testName ? ` · ${f.testName}${f.testResult ? ` (${f.testResult})` : ''}` : ''}`;
+          })()),
           foot(f, f.bounty ? [h('span', `$${Number(f.bounty).toLocaleString()}`)] : [])),
       ], { draggable: true });
       if (!items.length && !col.querySelector('.empty')) col.querySelector('.column-list').append(h('div.empty', 'Drop a finding here'));
@@ -404,7 +422,7 @@ export function createBoards(root) {
     setChildren(el,
       h('div.agent-head', avatar(a, 'lg'),
         h('div', h('div.agent-name', a.name),
-          h('div.agent-meta', h('span.pill', { 'data-tip': 'How this agent is connected' }, TRANSPORT[a.transport] || a.transport),
+          h('div.agent-meta', h('span.pill', { 'data-tip': 'How this agent has connected' }, (a.transports?.length ? a.transports : [a.transport]).map((x) => TRANSPORT[x] || x).join(' + ')),
             h('span', hl.status), a.model ? h('span', a.model) : null, h('span', 'seen ', timeEl(hl.lastSeen || a.updatedAt)))),
         h('div.right',
           h('button.btn.btn-sm', { on: { click: (e) => openSteerComposer(e.currentTarget, { item: a, action: 'note' }) } }, icon('flag'), 'Steer'),

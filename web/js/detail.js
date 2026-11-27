@@ -6,8 +6,9 @@
 // from an agent writing to the same item.
 
 import { h, icon, setChildren, timeEl, toast, confirmDialog, term, flash, menu } from './ui.js';
-import { live, write, list, byId, titleOf, authorName, historyOf } from './state.js';
+import { live, write, list, byId, titleOf, authorName, historyOf, get } from './state.js';
 import {
+  CARD_FIELDS, EXPLOIT_STAGE, CONFIRM_STEPS, LEAD_STATE, VALUE, GLUE,
   RELATION, PHASES, ORIGIN, CATEGORY, REVIEW, SEVERITY, STAGES, HYP_STATUS, ASM_STATE, CONFIDENCE, VERIFICATION, PRIORITY,
   STEER, STEERS_FOR, STEER_STATE, KIND_ICON, EVIDENCE_ICON, PROTOCOL_ICON,
 } from './labels.js';
@@ -27,6 +28,8 @@ export function createDetail(item, { onClose, inMap = false } = {}) {
     verify: h('div.detail-sec'),
     steer: h('div.detail-sec'),
     props: h('div.detail-sec'),
+    card: h('div.detail-sec'),
+    scope: h('div.detail-sec'),
     text: h('div.detail-sec'),
     evidence: h('div.detail-sec'),
     checklist: h('div.detail-sec'),
@@ -53,6 +56,8 @@ export function createDetail(item, { onClose, inMap = false } = {}) {
     renderVerify();
     renderSteer();
     renderProps();
+    renderCard();
+    renderScope();
     if (!textEditing) renderText();
     renderEvidence(prev);
     renderChecklist();
@@ -133,6 +138,98 @@ export function createDetail(item, { onClose, inMap = false } = {}) {
       steers.length ? h('div', { style: { marginTop: '10px' } }, ...steers.map((s) => steerMini(s))) : null);
   }
 
+  // The confirmation card for findings, and the confirmation loop for hypotheses.
+  async function renderCard() {
+    const it = current;
+    if (it.kind === 'hypothesis') {
+      secs.card.hidden = false;
+      const done = it.confirm || {};
+      setChildren(secs.card,
+        h('div.sec-label', icon('list'), 'Confirmation loop', h('span.right', it.exploitStage ? h(`span.stage-pill.${it.exploitStage}`, EXPLOIT_STAGE[it.exploitStage].label) : 'stage not set')),
+        ...CONFIRM_STEPS.map((st) => {
+          const state = done[st.id]?.state || 'unchecked';
+          return h('div.check', {
+            'data-state': state, role: 'checkbox', tabindex: 0,
+            on: { click: () => save({ confirm: { [st.id]: state === 'checked' ? 'unchecked' : 'checked' } }) },
+          }, h('span.box', state === 'checked' ? icon('check') : null), h('span', st.text), done[st.id]?.by ? h('span.who', authorName(done[st.id].by)) : null);
+        }));
+      return;
+    }
+    if (it.kind !== 'finding') { secs.card.hidden = true; return; }
+    secs.card.hidden = false;
+    const rows = CARD_FIELDS.map((f) => row(f.label, f.options
+      ? select(it[f.id] || '', ['', ...f.options], (v) => save({ [f.id]: v }), { labels: { '': '—' } })
+      : input(it[f.id], (v) => save({ [f.id]: v }), { placeholder: f.hint }), it, f.id));
+    const gates = h('div.gate-list', h('div.gate', h('span.spinner')));
+    setChildren(secs.card,
+      h('div.sec-label', icon('shield'), 'Confirmation card', h('span.right', h('span.ready-pill.no', '…'))),
+      h('div.props', ...rows.flat()),
+      gates);
+    try {
+      const r = await get(`/api/findings/${it.id}/check`);
+      if (current.id !== it.id) return;
+      const pill = secs.card.querySelector('.ready-pill');
+      pill.className = `ready-pill ${r.ready ? 'yes' : 'no'}`;
+      pill.textContent = r.ready ? 'ready to report' : 'not ready';
+      const bad = [
+        ...r.card.map((g) => `${g.field}: ${g.why}`),
+        ...r.evidence.map((g) => `evidence: ${g}`),
+        ...(r.severity ? [r.severity] : []),
+        ...(r.testPassing ? [] : ['the test has not passed on its last run']),
+        ...(r.duplicateOf ? [`duplicate of "${r.duplicateOf.title}"`] : []),
+        ...(r.matchesAlreadyReported ? [`matches already reported: ${r.matchesAlreadyReported.title}`] : []),
+      ];
+      setChildren(gates, ...(bad.length ? bad.map((b) => h('div.gate.bad', icon('x'), b)) : [h('div.gate.ok', icon('check'), 'Card complete, evidence attached, severity earned, test passing.')]));
+    } catch { gates.replaceChildren(); }
+  }
+
+  // Program scope on targets: what is in, what is out, what was already reported.
+  async function renderScope() {
+    const it = current;
+    if (it.kind !== 'target') { secs.scope.hidden = true; return; }
+    secs.scope.hidden = false;
+    const types = ['lending', 'amm', 'perps', 'bridge', 'staking', 'nft-market', 'governance', 'oracle', 'token', 'vault', 'factory', 'dao-module', 'nft-custody', 'naming', 'other'];
+    const extra = new Set(it.playbooks || []);
+    const reported = (it.alreadyReported || []).map((r) => (typeof r === 'string' ? { title: r } : r));
+    const addInput = h('input.inline', { placeholder: 'Title of an already-reported issue (date, contract)' });
+    const addReported = () => {
+      const v = addInput.value.trim();
+      if (!v) return;
+      const [title, date, contract] = v.split(',').map((x) => x.trim());
+      save({ alreadyReported: [...reported, { title, ...(date ? { date } : {}), ...(contract ? { contract } : {}) }] });
+    };
+    addInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') addReported(); });
+    const rows = [
+      row('In scope', input(it.inScope, (v) => save({ inScope: v }), { placeholder: 'Contracts, repos, chains in scope' }), it, 'inScope'),
+      row('Out of scope', input(it.outOfScope, (v) => save({ outOfScope: v }), { placeholder: 'Third-party, frontend, known issues' }), it, 'outOfScope'),
+      row('Disclosure', input(it.disclosureChannel, (v) => save({ disclosureChannel: v }), { placeholder: 'security@… or a platform link' }), it, 'disclosureChannel'),
+      row('Severity scale', input(it.severityScale, (v) => save({ severityScale: v }), { placeholder: 'The program\'s scale and rewards' }), it, 'severityScale'),
+      row('Rules', input(it.bountyRules, (v) => save({ bountyRules: v }), { placeholder: 'e.g. one vulnerability per submission' }), it, 'bountyRules'),
+      row('Already reported', h('div.list-editor',
+        ...reported.map((r, i) => h('div.li', h('span', `${r.title}${r.date ? ` · ${r.date}` : ''}${r.contract ? ` · ${r.contract}` : ''}`),
+          h('button.tool.sm', { 'aria-label': 'Remove', style: { width: '22px', height: '22px' }, on: { click: () => save({ alreadyReported: reported.filter((_, j) => j !== i) }) } }, icon('x')))),
+        h('div.add', addInput, h('button.btn.btn-xs', { on: { click: addReported } }, icon('plus')))), it, 'alreadyReported'),
+      row('Also use', h('div.steer-actions', ...types.filter((t) => t !== it.protocolType).map((t) => h(`button.filter`, {
+        'aria-pressed': String(extra.has(t)), style: { height: '24px', fontSize: '11px' },
+        on: { click: () => { const n = new Set(extra); if (n.has(t)) n.delete(t); else n.add(t); save({ playbooks: [...n] }); } },
+      }, t))), it, 'playbooks'),
+    ];
+    setChildren(secs.scope, h('div.sec-label', icon('target'), 'Program scope and playbooks'), h('div.props', ...rows.flat()), h('div.ignored-classes'));
+    const ignored = new Set(it.ignoredClasses || []);
+    const allClasses = new Map();
+    for (const t of [it.protocolType || 'other', ...extra]) {
+      const pb = await loadPlaybook(t);
+      for (const c of pb?.classes || []) allClasses.set(c.id, c.name);
+    }
+    if (current.id !== it.id) return;
+    setChildren(secs.scope.querySelector('.ignored-classes'),
+      h('div.field-label', { style: { margin: '10px 0 6px' } }, 'Exploit classes (click to ignore the ones that do not apply)'),
+      h('div.steer-actions', ...[...allClasses].map(([id, nm]) => h('button.filter', {
+        'aria-pressed': String(!ignored.has(id)), style: { height: '24px', fontSize: '11px', textDecoration: ignored.has(id) ? 'line-through' : 'none' },
+        on: { click: () => { const n = new Set(ignored); if (n.has(id)) n.delete(id); else n.add(id); save({ ignoredClasses: [...n] }); } },
+      }, nm))));
+  }
+
   function renderProps() {
     const it = current;
     const rows = propsFor(it, save);
@@ -184,7 +281,8 @@ export function createDetail(item, { onClose, inMap = false } = {}) {
     const prevIds = new Set((prev?.evidence || []).map((e) => e.id));
     const items = (it.evidence || []).slice().reverse().map((e) => {
       const row = h('div.ev', icon(EVIDENCE_ICON[e.kind] || 'note'),
-        h('div', h('div.ref', e.ref || '(no reference)'), e.note ? h('div.note', e.note) : null),
+        h('div', h('div.ref', e.ref || '(no reference)'), e.note ? h('div.note', e.note) : null,
+          e.block || e.rpc || e.result ? h('div.note', [e.result ? `result ${e.result}` : '', e.block ? `block ${e.block}` : '', e.rpc || ''].filter(Boolean).join(' · ')) : null),
         h('div.by', authorAvatar(e.by), timeEl(e.at),
           h('button.tool.sm', {
             'aria-label': 'Remove evidence', 'data-tip': 'Remove',
@@ -205,7 +303,8 @@ export function createDetail(item, { onClose, inMap = false } = {}) {
     if (it.kind !== 'component') { secs.checklist.hidden = true; return; }
     secs.checklist.hidden = false;
     const target = byId(it.targetId);
-    const pb = await loadPlaybook(target?.protocolType || 'other');
+    let pb = null;
+    try { pb = target ? await get(`/api/targets/${target.id}/playbook`) : await loadPlaybook('other'); } catch { pb = await loadPlaybook(target?.protocolType || 'other'); }
     if (!pb || current !== it) return;
     const done = it.checklist || {};
     let checked = 0;
@@ -316,7 +415,7 @@ function stateLabel(meta) {
 }
 
 function titleField(kind) {
-  return { finding: 'title', hypothesis: 'text', assumption: 'text', proposal: 'text', steer: 'note', relation: 'label' }[kind] || 'name';
+  return { finding: 'title', hypothesis: 'text', assumption: 'text', proposal: 'text', steer: 'note', relation: 'label', chain: 'title', lead: 'text' }[kind] || 'name';
 }
 
 export function steerMini(s) {
@@ -405,6 +504,9 @@ function propsFor(it, save) {
         row(h('span', { 'data-term': 'confidence', class: 'term' }, 'Confidence'), select(it.confidence, Object.keys(CONFIDENCE), s('confidence'), { labels: CONFIDENCE }), it, 'confidence'),
         row(h('span', { 'data-term': 'bug class', class: 'term' }, 'Bug class'), input(it.bugClass, s('bugClass'), { placeholder: 'e.g. reentrancy' }), it, 'bugClass'),
         row('Component', select(it.componentId || '', componentOptions(it.targetId), s('componentId'), { labels: componentLabels() }), it, 'componentId'),
+        row(h('span', { 'data-tip': 'capability: the power exists, no public path fires it yet. trigger: a path fires it, impact unproven. full: trigger + impact.', class: 'term' }, 'Exploit stage'),
+          select(it.exploitStage || '', ['', ...Object.keys(EXPLOIT_STAGE)], s('exploitStage'), { labels: { '': 'not set', ...Object.fromEntries(Object.entries(EXPLOIT_STAGE).map(([k, m]) => [k, m.label])) } }), it, 'exploitStage'),
+        row('Trigger', input(it.trigger, s('trigger'), { placeholder: 'The public path that makes it fire' }), it, 'trigger'),
         ...(it.status === 'dropped' ? [row('Why dropped', input(it.dropReason, s('dropReason'), { placeholder: 'What ruled it out' }), it, 'dropReason')] : []),
       ];
     case 'finding':
@@ -433,10 +535,27 @@ function propsFor(it, save) {
         row('Chain', input(it.chain, s('chain'), { placeholder: 'e.g. mainnet' }), it, 'chain'),
         row('Scope', input(it.scope, s('scope'), { placeholder: 'In-scope paths or contracts' }), it, 'scope'),
       ];
+    case 'lead':
+      return [
+        row('State', select(it.state, Object.keys(LEAD_STATE), s('state'), { labels: Object.fromEntries(Object.entries(LEAD_STATE).map(([k, m]) => [k, m.label])) }), it, 'state'),
+        row('Value', select(it.value, Object.keys(VALUE), s('value'), { labels: VALUE }), it, 'value'),
+        row('Why it matters', input(it.why, s('why'), { placeholder: 'What it would prove or change' }), it, 'why'),
+        row('Blocked by', input(it.blockedBy, s('blockedBy'), { placeholder: 'What is in the way' }), it, 'blockedBy'),
+        row('Next step', input(it.nextStep, s('nextStep'), { placeholder: 'The concrete next action' }), it, 'nextStep'),
+        row('Outcome', input(it.outcome, s('outcome'), { placeholder: 'What came of it' }), it, 'outcome'),
+      ];
+    case 'chain':
+      return [
+        row('Parts', h('div.chain-parts', ...(it.parts || []).map((id, i) => [i ? h('span.plus', '+') : null, h('button.part', { style: { border: 0, cursor: 'pointer' }, on: { click: () => bus.open(id) } }, titleOf(byId(id)) || id)])), null, null),
+        row('Glue', select(it.glue, Object.keys(GLUE), s('glue'), { labels: GLUE }), it, 'glue'),
+        row('Attacker controls the glue', select(String(Boolean(it.gluePermissionless)), ['false', 'true'], (v) => save({ gluePermissionless: v === 'true' }), { labels: { false: 'no', true: 'yes' } }), it, 'gluePermissionless'),
+        row('Result', input(it.result, s('result'), { placeholder: 'The extra impact no single part has' }), it, 'result'),
+        row('Severity', select(it.severity, Object.keys(SEVERITY), s('severity'), { labels: labelsOf(SEVERITY) }), it, 'severity'),
+      ];
     case 'agent':
       return [
         row('Status', h('span', it.status), null, null),
-        row('Transport', h('span', it.transport), null, null),
+        row('Transport', h('span', (it.transports || [it.transport]).join(' + ')), null, null),
         row('Focus', h('span', it.focus || '—'), it, 'focus'),
       ];
     default:

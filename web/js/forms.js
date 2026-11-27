@@ -125,6 +125,20 @@ export async function newItem(kind, defaults = {}) {
       submit = (v) => write.create('hypothesis', clean(v));
       break;
     }
+    case 'lead':
+      title = 'Add an open thread';
+      lead = 'Something worth doing that is not done yet, so it is not forgotten: a check that is blocked, a follow-up, a hunch to chase.';
+      body = [
+        field('What is left to do', textarea('text', { placeholder: 'Measure what the vault actually holds', rows: 2 })),
+        h('div.row-fields',
+          field('Value', seg('value', [['high', 'High'], ['med', 'Medium'], ['low', 'Low']], 'high')),
+          field('Target', select('targetId', targetOptions(), firstTarget))),
+        field('Why it matters', input('why', { placeholder: 'What it would prove or change' })),
+        field('Blocked by', input('blockedBy', { placeholder: 'Optional: what is in the way' })),
+        field('Next step', input('nextStep', { placeholder: 'Optional: the concrete next action' })),
+      ];
+      submit = (v) => write.create('lead', clean({ ...v, state: v.blockedBy ? 'blocked' : 'open' }));
+      break;
     case 'finding':
       title = 'Add a finding';
       lead = 'A bug you can back with evidence. Findings move through the pipeline to responsible disclosure.';

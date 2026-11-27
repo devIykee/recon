@@ -11,6 +11,7 @@ import { openConnect } from './connect.js';
 import { bus, loadGlossary } from './bus.js';
 import { isTyping } from './canvas.js';
 import { avatar } from './steer.js';
+import { openReport, openEngagements } from './panels.js';
 
 const app = document.getElementById('app');
 const $ = (id) => document.getElementById(id);
@@ -195,7 +196,7 @@ async function startOwn() {
   const m = modal([
     h('div.steps', h('span.on'), h('span'), h('span')),
     h('h2', 'Start your own engagement'),
-    h('p.lead', 'Three quick steps: name a target, pick what kind of protocol it is, connect your agent. The example gets cleared; export it first if you want to keep it.'),
+    h('p.lead', 'Three quick steps: name a target, pick what kind of protocol it is, connect your agent. The example stays in your engagements list; nothing is deleted.'),
     h('div.field', h('label', 'Engagement name'), name),
     h('div.modal-actions', h('button.btn', { on: { click: () => m.close() } }, 'Cancel'),
       h('button.btn.btn-primary', {
@@ -224,7 +225,10 @@ function openMenu(anchor) {
     { text: 'Assumption', icon: 'sticky', action: () => newItem('assumption') },
     { text: 'Hypothesis', icon: 'flask', action: () => newItem('hypothesis') },
     { text: 'Finding', icon: 'bug', action: () => newItem('finding') },
+    { text: 'Open thread', icon: 'compass', action: () => newItem('lead') },
     '-',
+    { text: 'Engagements…', icon: 'clock', shortcut: 'E', action: openEngagements },
+    { text: 'Report…', icon: 'file', shortcut: 'R', action: openReport },
     { text: 'Connect an agent', icon: 'plug', shortcut: 'C', action: () => openConnect() },
     { text: 'Export project (JSON)', icon: 'download', action: exportProject },
     { text: 'Import project…', icon: 'upload', action: importProject },
@@ -284,6 +288,8 @@ async function openHelp() {
         h('kbd', 'Space'), h('span', 'Hold and drag to pan'),
         h('kbd', '['), h('span', 'Toggle the side panel'),
         h('kbd', 'C'), h('span', 'Connect an agent'),
+        h('kbd', 'E'), h('span', 'Engagements (saved sessions, snapshots)'),
+        h('kbd', 'R'), h('span', 'The report'),
         h('kbd', 'N'), h('span', 'Add something'),
         h('kbd', 'Esc'), h('span', 'Close'))),
       h('div', h('div.sec-label', 'Colors'), h('div.kbd-grid',
@@ -326,13 +332,14 @@ function slug(s) {
 
 // ---------- navigation ----------
 
-const BOARD_FOR = { relation: 'architecture', component: 'coverage', assumption: 'assumptions', hypothesis: 'hypotheses', finding: 'findings', agent: 'agents', target: 'coverage' };
+const BOARD_FOR = { chain: 'findings', relation: 'architecture', component: 'coverage', assumption: 'assumptions', hypothesis: 'hypotheses', finding: 'findings', agent: 'agents', target: 'coverage' };
 
 function open(id) {
   const item = byId(id);
   if (!item) { toast('That item no longer exists.'); return; }
   if (item.kind === 'steer') { setSidebar(true); sidebar.select('steers'); return; }
   if (item.kind === 'proposal') { setSidebar(true); sidebar.select('next'); return; }
+  if (item.kind === 'lead') { setSidebar(true); sidebar.select('threads'); return; }
   if (view === 'map' && map.has(id)) { map.expand(id); return; }
   if (view === 'architecture' && ['component', 'relation', 'assumption'].includes(item.kind)) { boards.open(id); return; }
   const board = BOARD_FOR[item.kind];
@@ -347,6 +354,8 @@ Object.assign(bus, {
   newItem: (kind, defaults) => newItem(kind, defaults),
   connect: () => openConnect(),
   sidebar: (tab) => { setSidebar(true); sidebar.select(tab); },
+  report: () => openReport(),
+  engagements: () => openEngagements(),
   focusAgent: (id) => map.focusAgent(id),
 });
 
@@ -384,9 +393,11 @@ on((evt) => {
     case 'change':
       beat();
       notify(evt);
+      if (evt.kind === 'finding' || evt.kind === 'chain') sidebar.refreshReport();
       schedule();
       break;
     case 'project':
+      sidebar.refreshReport();
       schedule(true);
       break;
     case 'auth':
@@ -427,6 +438,7 @@ $('project-name').addEventListener('change', async (e) => {
   if (!v) { e.target.value = live.state.project.name; return; }
   try { await patch('/api/project', { name: v }); } catch (err) { toast(err.message, 'error'); }
 });
+$('engagements-btn')?.addEventListener('click', () => openEngagements());
 $('project-name').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Escape') e.target.blur(); });
 
 for (const b of document.querySelectorAll('[data-zoom]')) {
@@ -462,6 +474,8 @@ addEventListener('keydown', (e) => {
     case '-': case '_': if (view === 'map') map.camera.zoomBy(0.8); break;
     case '[': setSidebar(!sidebarOpen); break;
     case 'c': case 'C': openConnect(); break;
+    case 'e': case 'E': openEngagements(); break;
+    case 'r': case 'R': openReport(); break;
     case 'n': case 'N': newMenu($('menu-btn')); break;
     case '?': openHelp(); break;
     default:

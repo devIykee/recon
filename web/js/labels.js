@@ -12,7 +12,7 @@ export const VIEWS = [
 ];
 
 export const KIND_ICON = {
-  target: 'target', component: 'coverage', relation: 'link', assumption: 'sticky', hypothesis: 'flask',
+  target: 'target', component: 'coverage', relation: 'link', chain: 'link', lead: 'compass', assumption: 'sticky', hypothesis: 'flask',
   finding: 'bug', steer: 'flag', proposal: 'sparkle', agent: 'agent', project: 'map',
 };
 
@@ -150,4 +150,45 @@ export const ORIGIN = {
 
 export const CATEGORY = {
   trust: 'trust', invariant: 'invariant', input: 'input', external: 'external', economic: 'economic', other: 'other',
+};
+
+export const CARD_FIELDS = [
+  { id: 'attacker', label: 'Attacker', options: ['stranger', 'holder', 'privileged', 'admin'], hint: 'Who can do it' },
+  { id: 'reachability', label: 'Reachability', options: ['permissionless', 'needs-role', 'needs-config', 'needs-social'], hint: 'What stands in the way' },
+  { id: 'bound', label: 'Bound', hint: 'What still cannot happen' },
+  { id: 'liveFunds', label: 'Funds at risk', hint: '"none", "unknown", or address + amount' },
+  { id: 'liveFundsMethod', label: 'Measured by', options: ['eth_call', 'fork', 'explorer', 'not-measured'] },
+  { id: 'alreadyReported', label: 'Already reported', options: ['no', 'yes', 'unknown'] },
+  { id: 'alreadyReportedRef', label: 'Checked against', hint: 'Audit, report, or "distinct: ..."' },
+  { id: 'verificationMethod', label: 'Verified by', options: ['fork', 'eth_call', 'unit', 'fuzz', 'live-tx', 'manual'] },
+  { id: 'testName', label: 'Test', hint: 'test_Name' },
+  { id: 'testResult', label: 'Last run', options: ['pass', 'fail', 'not-run'] },
+];
+
+export const EXPLOIT_STAGE = {
+  capability: { label: 'Capability', hint: 'The power exists, but no public path makes it fire yet. Hunt the trigger.' },
+  trigger: { label: 'Trigger found', hint: 'A path makes it fire; impact not proven yet.' },
+  full: { label: 'Full exploit', hint: 'Trigger plus impact. Can become a finding.' },
+};
+
+export const CONFIRM_STEPS = [
+  { id: 'caller', text: 'Name the function and the caller who can hit it without extra trust' },
+  { id: 'fork', text: 'Run it on a fork against live bytecode (not a rewritten local copy)' },
+  { id: 'bound', text: 'Write the bound next to the scary part: what still cannot happen' },
+  { id: 'reported', text: 'Check already-reported issues and third-party scope' },
+  { id: 'funds', text: 'Measure live funds, or say they were not measured' },
+  { id: 'severity', text: 'Only then pick severity, on the program\'s scale' },
+];
+
+export const LEAD_STATE = {
+  open: { label: 'Open', color: 'var(--primary)' },
+  blocked: { label: 'Blocked', color: 'var(--warn)' },
+  done: { label: 'Done', color: 'var(--ok)' },
+  dropped: { label: 'Dropped', color: 'var(--faint)' },
+};
+
+export const VALUE = { high: 'High value', med: 'Medium value', low: 'Low value' };
+
+export const GLUE = {
+  'same-tx': 'same transaction', 'same-caller': 'same caller', 'config+code': 'a config the team chose + code', 'social+code': 'a social step + code', other: 'other',
 };

@@ -147,7 +147,7 @@ function handle(msg) {
 }
 
 function normalize(s) {
-  for (const k of ['agent', 'target', 'component', 'relation', 'assumption', 'hypothesis', 'finding', 'steer', 'proposal']) {
+  for (const k of ['agent', 'target', 'component', 'relation', 'assumption', 'hypothesis', 'finding', 'chain', 'steer', 'proposal', 'lead']) {
     s.items[k] = s.items[k] || {};
   }
   s.activity = s.activity || [];
@@ -159,7 +159,7 @@ function normalize(s) {
 // ---------- selectors ----------
 
 export const KIND_LABEL = {
-  agent: 'agent', target: 'target', component: 'component', relation: 'connection', assumption: 'assumption',
+  agent: 'agent', target: 'target', component: 'component', relation: 'connection', chain: 'chain', lead: 'open thread', assumption: 'assumption',
   hypothesis: 'hypothesis', finding: 'finding', steer: 'steer', proposal: 'proposal',
 };
 
