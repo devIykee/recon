@@ -19,8 +19,8 @@ export function seedExample(store) {
     scope: 'contracts/core/*, contracts/oracle/*',
   }, human);
 
-  const comp = (name, kind, reviewState, location, extra = {}) => store.create('component', {
-    targetId: t.id, name, kind, reviewState, location, ...extra,
+  const comp = (name, type, reviewState, location, extra = {}) => store.create('component', {
+    targetId: t.id, name, type, reviewState, location, ...extra,
   }, scout.id);
 
   const deposit = comp('LendingPool.deposit()', 'function', 'reviewed', 'contracts/core/LendingPool.sol:88', {

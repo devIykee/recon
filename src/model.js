@@ -76,7 +76,7 @@ export const SCHEMA = {
   component: {
     targetId: str(A, { required: true, ref: 'target' }),
     name: str(A, { required: true }),
-    kind: en('componentKind', A, 'contract'),
+    type: en('componentKind', A, 'contract'),
     reviewState: en('reviewState', A, 'untouched'),
     location: str(),
     owner: str(),
@@ -295,4 +295,11 @@ export function describeModel() {
     }]));
   }
   return { enums: ENUMS, kinds };
+}
+
+// Guard: no schema field may shadow a hub-managed field (id, kind, timestamps...).
+for (const [kind, spec] of Object.entries(SCHEMA)) {
+  for (const key of Object.keys(spec)) {
+    if (SYSTEM_FIELDS.has(key)) throw new Error(`schema bug: ${kind}.${key} shadows a system field`);
+  }
 }
