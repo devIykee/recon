@@ -1,0 +1,110 @@
+// Plain-language labels, colors and icons for every enum. One place, so the
+// whole ui speaks the same words.
+
+export const VIEWS = [
+  { id: 'map', label: 'Map', icon: 'map', key: '1', tip: 'The whole engagement at a glance' },
+  { id: 'coverage', label: 'Coverage', icon: 'coverage', key: '2', tip: 'Attack surface: what has been looked at', term: 'coverage' },
+  { id: 'assumptions', label: 'Assumptions', icon: 'sticky', key: '3', tip: 'What is being taken for granted', term: 'assumption' },
+  { id: 'hypotheses', label: 'Hypotheses', icon: 'flask', key: '4', tip: 'Suspected bugs being tested', term: 'hypothesis' },
+  { id: 'findings', label: 'Findings', icon: 'bug', key: '5', tip: 'Confirmed bugs, from recon to disclosure', term: 'finding' },
+  { id: 'agents', label: 'Agents', icon: 'agents', key: '6', tip: 'Who is working on what' },
+];
+
+export const KIND_ICON = {
+  target: 'target', component: 'coverage', assumption: 'sticky', hypothesis: 'flask',
+  finding: 'bug', steer: 'flag', proposal: 'sparkle', agent: 'agent', project: 'map',
+};
+
+export const REVIEW = {
+  untouched: { label: 'Untouched', color: 'var(--st-untouched)', hint: 'Nobody has looked yet' },
+  scanning: { label: 'Scanning', color: 'var(--st-scanning)', hint: 'Being looked at right now' },
+  reviewed: { label: 'Reviewed', color: 'var(--st-reviewed)', hint: 'Looked at, nothing found' },
+  flagged: { label: 'Flagged', color: 'var(--st-flagged)', hint: 'Something smells here' },
+};
+
+export const SEVERITY = {
+  critical: { label: 'Critical', color: 'var(--sev-critical)' },
+  high: { label: 'High', color: 'var(--sev-high)' },
+  medium: { label: 'Medium', color: 'var(--sev-medium)' },
+  low: { label: 'Low', color: 'var(--sev-low)' },
+  info: { label: 'Info', color: 'var(--sev-info)' },
+};
+
+export const STAGES = {
+  recon: { label: 'Recon', hint: 'Spotted, not yet tested' },
+  testing: { label: 'Testing', hint: 'Building a reproduction' },
+  reported: { label: 'Reported', hint: 'Sent to the team privately' },
+  acknowledged: { label: 'Acknowledged', hint: 'The team confirmed it' },
+  fixed: { label: 'Fixed', hint: 'A fix is deployed' },
+  disclosed: { label: 'Disclosed', hint: 'Public, after the fix' },
+};
+
+export const HYP_STATUS = {
+  testing: { label: 'Testing', color: 'var(--primary)', hint: 'Being proven or disproven' },
+  confirmed: { label: 'Confirmed', color: 'var(--sev-critical)', hint: 'It is real' },
+  dropped: { label: 'Dropped', color: 'var(--faint)', hint: 'Turned out not to be a bug' },
+};
+
+export const ASM_STATE = {
+  assumed: { label: 'Assumed', color: 'var(--sticky-fg)', hint: 'Taken for granted, unchecked' },
+  verified: { label: 'Holds', color: 'var(--ok)', hint: 'Checked and true' },
+  invalidated: { label: 'Broken', color: 'var(--bad)', hint: 'Checked and false: look closer' },
+};
+
+export const CONFIDENCE = { low: 'Low', med: 'Medium', high: 'High' };
+
+export const VERIFICATION = {
+  unverified: { label: 'Unverified', icon: 'eye', hint: 'The agent said so; nobody has checked' },
+  verified: { label: 'Verified', icon: 'check', hint: 'You checked the evidence and agree' },
+  disputed: { label: 'Disputed', icon: 'x', hint: 'You checked and do not buy it. The agent is asked to revisit.' },
+};
+
+export const PRIORITY = {
+  low: { label: 'Low', icon: 'down' },
+  normal: { label: 'Normal', icon: 'minus' },
+  high: { label: 'High', icon: 'up' },
+  urgent: { label: 'Urgent', icon: 'zap' },
+};
+
+export const STEER = {
+  recheck: { label: 'Re-check', icon: 'recheck', verb: 'Re-check this', hint: 'Ask for another look' },
+  challenge: { label: 'Challenge', icon: 'challenge', verb: 'Challenge this assumption', hint: 'Ask the agent to try to break it' },
+  cover: { label: 'Cover', icon: 'cover', verb: 'Cover this', hint: 'Point an agent at it' },
+  verify: { label: 'Verify', icon: 'verify', verb: 'Verify this', hint: 'Ask for stronger evidence or a repro' },
+  priority: { label: 'Priority', icon: 'priority', verb: 'Re-prioritize', hint: 'Change what gets attention first' },
+  note: { label: 'Note', icon: 'message', verb: 'Leave a note', hint: 'A note or a question' },
+};
+
+export const STEER_STATE = {
+  open: { label: 'Open', hint: 'Waiting for the agent to see it' },
+  acknowledged: { label: 'Seen', hint: 'The agent saw it and will get to it' },
+  addressed: { label: 'Done', hint: 'The agent reported back' },
+};
+
+export const STEERS_FOR = {
+  component: ['cover', 'recheck', 'note'],
+  assumption: ['challenge', 'recheck', 'note'],
+  hypothesis: ['verify', 'recheck', 'note'],
+  finding: ['verify', 'recheck', 'note'],
+  target: ['cover', 'note'],
+  agent: ['note', 'cover'],
+};
+
+export const TRANSPORT = {
+  mcp: 'MCP', cli: 'CLI', api: 'HTTP', json: 'JSON file', demo: 'example', ui: 'browser',
+};
+
+export const PROTOCOL_ICON = {
+  lending: '🏦', amm: '🔁', perps: '📈', bridge: '🌉', staking: '🥩', 'nft-market': '🖼️',
+  governance: '🗳️', oracle: '🔮', token: '🪙', vault: '🧰', other: '🧩',
+};
+
+export const ACTION_LABEL = {
+  added: 'added', joined: 'joined', moved: 'moved', updated: 'updated', verified: 'verified',
+  disputed: 'disputed', unverified: 'unverified', steered: 'steered', acknowledged: 'acknowledged',
+  addressed: 'addressed', reopened: 'reopened', proposed: 'proposed', accepted: 'accepted',
+  declined: 'declined', removed: 'removed', prioritized: 'prioritized', claimed: 'claimed',
+  evidence: 'evidence', imported: 'imported', note: 'note', focus: 'focus',
+};
+
+export const EVIDENCE_ICON = { code: 'code', tx: 'hash', log: 'log', test: 'test', link: 'link', note: 'note' };
