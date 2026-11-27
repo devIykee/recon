@@ -81,6 +81,12 @@ parts nobody has looked at; that is where bugs hide. Hypotheses and findings sit
 in lanes beside the target, assumptions are pinned below, and each agent's
 marker walks to whatever it is working on. Click anything to expand it in place.
 
+**A full-screen system map** (press 3): every contract, the people and roles
+that use it and the outside systems it depends on, with each connection drawn
+as a colored arrow. Zoom and drag it like a canvas, or go browser full screen.
+Click a part and everything unrelated fades, so you can read what it calls and
+what can reach it.
+
 **Boards** for coverage, assumptions, hypotheses, the findings pipeline
 (recon → testing → reported → acknowledged → fixed → disclosed, drag to move),
 and agents.

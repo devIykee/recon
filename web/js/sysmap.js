@@ -47,22 +47,32 @@ export function createSystemMap() {
     });
     const viewport = h('div.sm-viewport', { tabindex: 0 });
     const world = h('div.sm-world');
-    viewport.append(world, h('div.sm-zoom',
-      h('button.tool.sm', { 'aria-label': 'Zoom in', 'data-tip': 'Zoom in', on: { click: () => zoomBy(1.25) } }, icon('plus')),
-      h('button.tool.sm', { 'aria-label': 'Zoom out', 'data-tip': 'Zoom out', on: { click: () => zoomBy(0.8) } }, icon('minus')),
-      h('button.tool.sm', { 'aria-label': 'Fit to screen', 'data-tip': 'Fit to screen', on: { click: () => fit() } }, icon('fit'))),
-    h('div.sm-hint', 'Drag to move · scroll or pinch to zoom · click a part to see only its connections'));
+    const zoomLabel = h('button.zoom-value', { 'aria-label': 'Reset zoom', 'data-tip': 'Reset to 100%', on: { click: () => zoomTo(1) } }, '100%');
+    viewport.append(world);
     const side = h('aside.sm-side');
+    const full = h('button.tool.sm', { 'aria-label': 'Full screen', 'data-tip': 'Full screen (browser)', on: { click: () => toggleFullscreen() } }, icon('fit'));
+    // The map fills the page; everything else floats on it.
     el = h('div.sysmap',
-      h('div.sm-bar', h('div.sm-title'), h('div.sm-tools', search)),
-      h('div.sm-filters'),
-      h('div.sm-gaps'),
-      h('div.sm-body', viewport, side));
-    parts = { search, viewport, world, side };
+      viewport,
+      h('div.sm-overlay',
+        h('div.sm-bar.island', h('div.sm-title'), h('div.sm-tools', search)),
+        h('div.sm-filters'),
+        h('div.sm-gaps')),
+      side,
+      h('div.sm-zoom.island',
+        h('button.tool.sm', { 'aria-label': 'Zoom out', 'data-tip': 'Zoom out ( - )', on: { click: () => zoomBy(0.8) } }, icon('minus')),
+        zoomLabel,
+        h('button.tool.sm', { 'aria-label': 'Zoom in', 'data-tip': 'Zoom in ( + )', on: { click: () => zoomBy(1.25) } }, icon('plus')),
+        h('span.sep'),
+        h('button.tool.sm', { 'aria-label': 'Fit to screen', 'data-tip': 'Fit everything ( F )', on: { click: () => fit() } }, icon('target')),
+        full),
+      h('div.sm-hint', 'Drag to move · scroll or pinch to zoom · click a part to see only its connections · Esc to let go'));
+    parts = { search, viewport, world, side, zoomLabel, full };
+    document.addEventListener('fullscreenchange', () => { el.classList.toggle('is-full', document.fullscreenElement === el); requestAnimationFrame(() => fit()); });
     panZoom(viewport);
     viewport.addEventListener('click', (e) => {
       if (viewport.dataset.justPanned) return;
-      if (!e.target.closest('.sm-node, .sm-label, .sm-zoom')) { picked = null; draw(true); }
+      if (!e.target.closest('.sm-node, .sm-label')) { picked = null; draw(true); }
     });
     addEventListener('resize', () => { if (el?.isConnected && targetId) { fitted.delete(targetId); draw(true); } });
   }
@@ -305,7 +315,23 @@ export function createSystemMap() {
 
   // ---------- pan and zoom, local to this page ----------
 
-  function apply() { parts.world.style.transform = `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})`; }
+  function apply() {
+    parts.world.style.transform = `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})`;
+    parts.zoomLabel.textContent = `${Math.round(cam.z * 100)}%`;
+  }
+  function zoomTo(z) { const r = parts.viewport.getBoundingClientRect(); zoomAt(z, r.left + r.width / 2, r.top + r.height / 2); }
+  function toggleFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else el.requestFullscreen?.().catch(() => toast('Your browser did not allow full screen here.', 'error'));
+  }
+  // The part of the screen not covered by the floating panels.
+  function free() {
+    const r = parts.viewport.getBoundingClientRect();
+    const top = el.querySelector('.sm-overlay').getBoundingClientRect();
+    const sideOn = el.classList.contains('with-side');
+    const sideR = parts.side.getBoundingClientRect();
+    return { left: 16, top: top.bottom - r.top + 12, right: (sideOn ? sideR.left - r.left : r.width) - 16, bottom: r.height - 64 };
+  }
   function zoomAt(z, sx, sy) {
     const r = parts.viewport.getBoundingClientRect();
     z = Math.max(MIN_Z, Math.min(MAX_Z, z));
@@ -320,19 +346,22 @@ export function createSystemMap() {
   function fit() {
     const r = parts.viewport.getBoundingClientRect();
     if (!size.W || !r.width) return;
-    const z = Math.max(MIN_Z, Math.min(1.15, (r.width - 48) / size.W, (r.height - 48) / size.H));
-    cam.z = z; cam.x = (r.width - size.W * z) / 2; cam.y = Math.max(16, (r.height - size.H * z) / 2);
+    const f = free();
+    const w = Math.max(200, f.right - f.left);
+    const hh = Math.max(200, f.bottom - f.top);
+    const z = Math.max(MIN_Z, Math.min(1.15, w / size.W, hh / size.H));
+    cam.z = z; cam.x = f.left + (w - size.W * z) / 2; cam.y = f.top + Math.max(0, (hh - size.H * z) / 2);
     apply();
   }
   function centerOn(id) {
     const n = parts.world.querySelector(`[data-id="${id}"]`);
     if (!n) return;
-    const r = parts.viewport.getBoundingClientRect();
+    const f = free();
     const x = n.offsetLeft + n.offsetWidth / 2;
     const y = n.offsetTop + n.offsetHeight / 2;
     cam.z = Math.max(cam.z, 0.8);
-    cam.x = r.width / 2 - x * cam.z - (picked ? 160 : 0);
-    cam.y = r.height / 2 - y * cam.z;
+    cam.x = (f.left + f.right) / 2 - x * cam.z;
+    cam.y = (f.top + f.bottom) / 2 - y * cam.z;
     apply();
   }
   function panZoom(vp) {
@@ -348,7 +377,7 @@ export function createSystemMap() {
     vp.addEventListener('pointerdown', (e) => {
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), z: cam.z }; pan = null; return; }
-      if (e.target.closest('.sm-zoom, .sm-node')) return;
+      if (e.target.closest('.sm-node')) return;
       pan = { x: e.clientX, y: e.clientY, cx: cam.x, cy: cam.y, moved: false };
       vp.setPointerCapture(e.pointerId);
       vp.classList.add('panning');
@@ -385,6 +414,8 @@ export function createSystemMap() {
 
   return {
     render,
+    zoomBy,
+    release() { if (!picked) return false; picked = null; draw(true); return true; },
     pick(tid, id) { targetId = tid; picked = id; showAssumptions = false; draw(true); requestAnimationFrame(() => centerOn(id)); },
     fit,
   };
