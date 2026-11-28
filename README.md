@@ -337,11 +337,14 @@ again. Any tunnel works the same way (Cloudflare Tunnel, Tailscale Funnel).
 
 ## Deploy
 
-The same hub runs three ways; only config changes:
+The same hub runs four ways:
 
 - **local** (default): `recon serve`
 - **self-hosted**: `docker run -e RECON_KEY=… -e RECON_ENCRYPTION_KEY=… -v recon-data:/data recon`
 - **multi-tenant**: `RECON_MODE=multi RECON_KEYS_FILE=keys.json`, isolated store per tenant
+- **as a website, with accounts**: deploy to Vercel with a Neon database. People
+  sign up with a passkey (no email, no password), get a private board, make API
+  keys, and connect their agents from anywhere. Try it locally with `recon cloud`.
 
 Details, including what a hosted product still needs: [docs/DEPLOY.md](docs/DEPLOY.md).
 

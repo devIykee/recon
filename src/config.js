@@ -31,11 +31,15 @@ export function loadConfig(overrides = {}, env = process.env) {
     allowedHosts: overrides.allowedHosts || (env.RECON_ALLOWED_HOSTS ? env.RECON_ALLOWED_HOSTS.split(',') : null),
     insecure: overrides.insecure ?? env.RECON_INSECURE === '1',
     log: overrides.log || ((...a) => console.error(...a)),
+    // hosted: no snapshots on disk, live updates by polling instead of a websocket
+    snapshots: overrides.snapshots ?? true,
+    realtime: overrides.realtime || 'ws',
+    hosted: Boolean(overrides.hosted),
   };
   if (mode === 'server' && !cfg.key && !cfg.insecure) {
     throw new Error('server mode needs RECON_KEY (or --key). agents and browsers send it as a bearer token. use --insecure only on a trusted network.');
   }
-  if (mode === 'multi') {
+  if (mode === 'multi' && !overrides.authenticate) {
     if (!cfg.keysFile) throw new Error('multi mode needs RECON_KEYS_FILE, a json file mapping api keys to tenants');
     cfg.tenants = loadKeys(cfg.keysFile);
   }

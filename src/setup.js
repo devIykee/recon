@@ -31,7 +31,8 @@ export async function runAgent({ name, url, key, hunt = undefined, out = process
   const { bin, shim } = installCopy();
   const hub = await ensureHub({ url: url || defaultUrl(), key, bin, log: (m) => err.write(`${m}\n`) });
   const who = name || '<your-name>';
-  const env = hub.url !== defaultUrl({}) ? `RECON_URL=${hub.url} ` : '';
+  // a hosted board needs the url and the api key on every command
+  const env = `${hub.url !== defaultUrl({}) ? `RECON_URL=${hub.url} ` : ''}${key && hub.url !== defaultUrl({}) ? `RECON_KEY=${key} ` : ''}`;
   // Different projects get different hunts: name it after the project this agent is working in.
   const huntName = hunt === undefined ? projectName(process.cwd()) : hunt;
   let started = null;

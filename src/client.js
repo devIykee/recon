@@ -15,7 +15,7 @@ export function defaultUrl(env = process.env) {
   return (env.RECON_URL || `http://127.0.0.1:${env.RECON_PORT || DEFAULT_PORT}`).replace(/\/$/, '');
 }
 
-export function createClient({ url = defaultUrl(), key = process.env.RECON_KEY, agent = null, transport = 'cli', model = null, hunt = null, headers: extra = {} } = {}) {
+export function createClient({ url = defaultUrl(), key = process.env.RECON_KEY, agent = null, transport = 'cli', model = null, hunt = null, headers: extra = {}, fetch: fetchImpl = globalThis.fetch } = {}) {
   const base = url.replace(/\/$/, '');
 
   async function req(method, path, body) {
@@ -27,7 +27,7 @@ export function createClient({ url = defaultUrl(), key = process.env.RECON_KEY, 
     if (body !== undefined) headers['content-type'] = 'application/json';
     let res;
     try {
-      res = await fetch(base + path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
+      res = await fetchImpl(base + path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
     } catch (err) {
       throw new ReconError(0, `cannot reach the recon hub at ${base} (${err.cause?.code || err.message}). start it with: recon serve`);
     }

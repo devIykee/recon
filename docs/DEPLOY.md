@@ -2,7 +2,8 @@
 
 The hub is what agents connect to and what holds live state. The web ui is just
 static files the hub serves. The same hub runs in three modes; only
-configuration changes.
+configuration changes. A fourth way, [hosted on Vercel with accounts](#hosted-on-vercel-with-accounts),
+wraps the multi mode in sign-up, passkeys and a database.
 
 | | local (default) | server | multi |
 | --- | --- | --- | --- |
@@ -78,11 +79,76 @@ RECON_MODE=multi RECON_KEYS_FILE=/etc/recon/keys.json RECON_ENCRYPTION_KEY=… n
   never set human-owned fields like verification.
 - Encryption at rest applies per tenant file.
 
-What this mode does not do yet, and a real hosted product needs: sign-in
-(today keys are provisioned in the keys file), per-tenant encryption keys or
-bring-your-own-storage, client-side encryption of evidence, and rate limits.
-The design keeps these additive: they sit in front of, or inside, `Tenant` in
-`src/hub.js` without changing how agents connect.
+Keys here are provisioned by hand in the keys file. For sign-up, sign-in and
+keys people make themselves, use the hosted version below.
+
+## Hosted on Vercel, with accounts
+
+This is recon as a website: a landing page, accounts anyone can create, and a
+private board per account that agents reach over the internet with an API key.
+It runs on Vercel functions and keeps everything in Neon Postgres.
+
+**Accounts.** No email and no password. People sign up with a passkey (Face ID,
+Touch ID, Windows Hello, a phone or a security key) and can add one per device.
+At sign-up they get a recovery code, shown once, which together with their
+account id gets them back in if every passkey is lost; using it replaces it.
+From the account page they make and revoke API keys, add or remove passkeys,
+rotate the recovery code, sign out everywhere, and delete the account and every
+hunt on it.
+
+**Agents.** The Connect dialog makes a key and fills it into three snippets:
+the paste-in prompt (`RECON_URL=… RECON_KEY=… npx -y github:devIykee/recon agent`),
+a remote MCP server (`claude mcp add --transport http recon https://<site>/mcp
+--header "Authorization: Bearer rk_…"`), and an MCP config for clients that
+start a local command. Keys are stored only as sha256 hashes.
+
+### Deploy it
+
+1. Import the GitHub repository as a new Vercel project. `vercel.json` already
+   says everything: no build step, one function (`api/index.js`) that answers
+   every path, and an empty `public/` directory so no repository file is ever
+   served as a static file.
+2. In the project, open **Storage → Create → Neon** and connect it to the
+   project. That sets `DATABASE_URL`. Tables are created on the first request.
+3. Add two environment variables:
+   - `RECON_SECRET`: at least 32 random characters (`openssl rand -hex 32`).
+     It signs session cookies and passkey challenges. Changing it signs
+     everyone out; nothing else is lost.
+   - `RECON_ORIGIN`: the site's public origin, such as `https://recon.example.com`.
+     Passkeys are bound to this domain. If you later move to another domain,
+     existing passkeys stop working there and people use their recovery code.
+4. Deploy. Visit the site, create an account, open the board, connect an agent.
+
+Run the same thing on your machine with `recon cloud` (port 4318). Without
+`DATABASE_URL` it keeps everything in memory and forgets it on exit; passkeys
+work on `localhost`.
+
+### How it works
+
+Every request belongs to one account. The function syncs that account's files
+from Neon into `/tmp`, runs the same hub the local version runs, and writes
+back only the files that changed, each guarded by its version number. If two
+requests (on two function instances) change the same file at once, one write
+is refused as a whole and that request runs again on fresh data, so no update
+is lost. The tests run two instances on one database and fire concurrent
+writes at both to check this.
+
+### What is different from running it yourself
+
+- **Polling, not WebSockets.** Vercel functions cannot hold a WebSocket, so the
+  board asks for changes every 2 seconds (every 10 when the tab is hidden) and
+  gets a 304 when nothing changed. Agents waiting with `recon_wait` are woken
+  within about 2 seconds, and a wait lasts at most 40 seconds before the agent
+  calls again.
+- **No snapshots.** Hunts are saved continuously, but the local version's
+  point-in-time snapshots are off.
+- **Encryption at rest is Neon's**, not recon's. If your findings are under
+  embargo, run recon locally or self-hosted with `RECON_ENCRYPTION_KEY`.
+- **Abuse protection is basic.** Sign-up needs a passkey, which stops simple
+  scripts, but there are no rate limits in recon itself. Turn on Vercel's
+  firewall rules or BotID if the site is public.
+- **Vercel's Hobby plan is for non-commercial use.** A product with paying
+  users needs the Pro plan.
 
 ## Configuration reference
 
@@ -102,3 +168,6 @@ The design keeps these additive: they sit in front of, or inside, `Tenant` in
 | `RECON_ALLOWED_HOSTS` | | | Host header allowlist |
 | `RECON_URL` | `--url` | `http://127.0.0.1:4317` | where the cli and mcp server find the hub |
 | `RECON_AGENT` | `--as` | | the cli's agent identity |
+| `DATABASE_URL` / `POSTGRES_URL` | | | hosted: the Neon database |
+| `RECON_SECRET` | | | hosted: signs cookies and passkey challenges (32+ chars) |
+| `RECON_ORIGIN` | | | hosted: the public origin passkeys are bound to |

@@ -86,6 +86,13 @@ export class Store extends EventEmitter {
     this._saveTimer = setTimeout(() => this.flush(), this.saveDelay);
   }
 
+  // stop any pending save, so a copy that is being replaced never writes again
+  dispose() {
+    clearTimeout(this._saveTimer);
+    this._saveTimer = null;
+    this.file = null;
+  }
+
   flush() {
     clearTimeout(this._saveTimer);
     this._saveTimer = null;

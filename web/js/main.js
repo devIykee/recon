@@ -307,6 +307,8 @@ function openMenu(anchor) {
     { text: 'Skills…', icon: 'book', shortcut: 'K', action: () => openSkills() },
     { text: 'Appearance: theme, fonts, size…', icon: 'sun', action: openAppearance },
     { text: 'Connect an agent', icon: 'plug', shortcut: 'C', action: () => openConnect() },
+    ...(live.hosted ? [{ text: 'Your account: passkeys and API keys', icon: 'user', action: () => { location.href = '/account'; } },
+      { text: 'Sign out', icon: 'x', action: async () => { await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' }); location.href = '/'; } }] : []),
     { text: 'Export project (JSON)', icon: 'download', action: exportProject },
     { text: 'Import project…', icon: 'upload', action: importProject },
     '-',
@@ -592,8 +594,11 @@ addEventListener('keydown', (e) => {
     case 'k': case 'K': openSkills(); break;
     case 'n': case 'N': newMenu($('menu-btn')); break;
     case '?': openHelp(); break;
-    default:
+    default: return;
   }
+  // a shortcut that opens a dialog focuses its first field during this keydown:
+  // without this the key's own character would be typed into it
+  e.preventDefault();
 });
 
 addEventListener('resize', () => schedule());

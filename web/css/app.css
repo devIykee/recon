@@ -613,3 +613,4 @@ code, .mono { font-family: var(--font-mono); font-size: .9em; }
 :root:not([data-density="comfortable"]) .panel-sub { margin: -3px 2px 8px; }
 :root:not([data-density="comfortable"]) .field { margin-bottom: 11px; }
 :root:not([data-density="comfortable"]) .modal { padding: 20px 22px; }
+.key-shown { display: flex; gap: 8px; align-items: center; padding: 9px 12px; border-radius: 9px; background: color-mix(in srgb, var(--ok) 12%, transparent); color: var(--ok); font-size: 13px; margin-bottom: 6px; }

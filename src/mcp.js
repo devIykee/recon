@@ -487,8 +487,9 @@ Rules of the board:
     name: 'recon_wait',
     description: 'Call this instead of ending your turn when you are done, blocked, or waiting on the human. It returns the moment the human writes to you from the board or decides one of your proposals, with what they said; then act on it, reply (recon_steer / recon_say) and call recon_wait again. While you wait the board shows you as listening. Returns { woke: false } after `seconds` with nothing new: call it again to keep listening. If your client cuts tool calls off after a minute (Codex), pass seconds: 50.',
     inputSchema: { type: 'object', properties: { seconds: { type: 'number', description: 'How long to wait at most (default 300, max 3600)' } } },
-    run: async (c, a) => {
-      const until = Date.now() + Math.min(Math.max(Number(a.seconds) || 300, 5), 3600) * 1000;
+    run: async (c, a, ctx = {}) => {
+      // hosted, a request may run for a minute at most: wait less and let the agent call again
+      const until = Date.now() + Math.min(Math.max(Number(a.seconds) || 300, 5), ctx.hosted ? 40 : 3600) * 1000;
       for (;;) {
         const left = Math.ceil((until - Date.now()) / 1000);
         if (left <= 0) break;
