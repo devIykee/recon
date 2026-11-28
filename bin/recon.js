@@ -694,6 +694,22 @@ async function wait() {
     : dim('nothing from the human yet; run recon wait again to keep listening')));
 }
 
+// Run hosted recon on this machine: accounts with passkeys, a private board per account.
+// Without DATABASE_URL it keeps everything in memory (gone when it stops).
+async function cloudCmd() {
+  const http = await import('node:http');
+  const { createCloud } = await import('../src/cloud/server.js');
+  const { neon, memoryDb } = await import('../src/cloud/db.js');
+  const url = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+  const db = url ? neon(url) : memoryDb();
+  const secret = process.env.RECON_SECRET || (await import('node:crypto')).randomBytes(32).toString('hex');
+  const cloud = createCloud({ db, secret, origin: process.env.RECON_ORIGIN || null, root: path.join((await import('node:os')).tmpdir(), `recon-cloud-${process.pid}`) });
+  const port = Number(flags.port || 4318);
+  const server = http.createServer((req, res) => cloud.handle(req, res));
+  await new Promise((r) => server.listen(port, flags.host || '127.0.0.1', r));
+  process.stderr.write(`\n  hosted recon on http://localhost:${port}  (${url ? 'database: DATABASE_URL' : 'in memory: nothing is kept'})\n\n`);
+}
+
 async function update() {
   const { runUpdate } = await import('../src/update.js');
   await runUpdate({ from: typeof flags.from === 'string' ? flags.from : null, check: Boolean(flags.check), url: flags.url || process.env.RECON_URL || undefined, key: flags.key ?? process.env.RECON_KEY });
@@ -827,7 +843,7 @@ const COMMANDS = {
   steers, ack: () => steerVerb('ack'), address: () => steerVerb('address'), steer,
   verify: () => verdict('verified'), dispute: () => verdict('disputed'), unverify: () => verdict('unverified'),
   accept: () => decide('accept'), decline: () => decide('decline'),
-  setup, agent: agentCmd, start, scan, relate, phase, ready, report, skills, wait, say, dismiss, update, rules, rule: ruleResult, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
+  setup, agent: agentCmd, start, scan, relate, phase, ready, report, skills, wait, say, dismiss, update, rules, rule: ruleResult, cloud: cloudCmd, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
 };
 
 async function main() {

@@ -107,7 +107,7 @@ class Tenant {
     this.cfg = cfg;
     const dir = cfg.mode === 'multi' ? path.join(cfg.dataDir, 'tenants', id) : cfg.dataDir;
     this.store = new Store({ encryptionKey: cfg.encryptionKey });
-    this.engagements = new Engagements(dir, this.store, { seed: cfg.mode === 'multi' ? 'empty' : cfg.seed, log: cfg.log, encryptionKey: cfg.encryptionKey });
+    this.engagements = new Engagements(dir, this.store, { seed: cfg.mode === 'multi' ? 'empty' : cfg.seed, log: cfg.log, encryptionKey: cfg.encryptionKey, snapshots: cfg.snapshots !== false });
     try { this.engagements.init(); } catch (err) {
       cfg.log(`recon: could not open the engagements in ${dir}: ${err.message}`);
       throw err;
@@ -143,7 +143,14 @@ export function createHub(overrides = {}) {
   const ws = new WsServer();
   // Requests the hub makes to itself (the http mcp endpoint) carry this; nobody else knows it.
   const internalToken = crypto.randomBytes(24).toString('hex');
-  const mcpSessions = new Map();
+  // MCP sessions: in memory for a local hub; hosted, they live in the database so any instance can serve them
+  const sessionMap = new Map();
+  const mcpSessions = overrides.mcpSessions || {
+    get: async (id) => sessionMap.get(id) || null,
+    set: async (id, s) => { sessionMap.set(id, s); },
+    delete: async (id) => { sessionMap.delete(id); },
+    prune: () => { for (const [id, sess] of sessionMap) if (Date.now() - sess.at > 24 * 3600_000) sessionMap.delete(id); },
+  };
 
   function tenant(id = 'default') {
     let t = tenants.get(id);
@@ -180,7 +187,12 @@ export function createHub(overrides = {}) {
 
   // ---------- auth ----------
 
-  function authenticate(req, url) {
+  async function authenticate(req, url) {
+    if (overrides.authenticate) return overrides.authenticate(req, url);
+    return authenticateLocal(req, url);
+  }
+
+  function authenticateLocal(req, url) {
     const header = req.headers.authorization || '';
     const token = header.startsWith('Bearer ') ? header.slice(7).trim() : (url.searchParams.get('token') || req.headers['x-recon-key'] || '');
     if (cfg.mode === 'multi') {
@@ -234,7 +246,7 @@ export function createHub(overrides = {}) {
   };
 
   route('GET', '/api/health', ({ auth }) => ({
-    ok: true, name: 'recon', version: VERSION, mode: cfg.mode, auth: Boolean(cfg.key || cfg.mode === 'multi'), tenant: auth?.tenant,
+    ok: true, name: 'recon', version: VERSION, mode: cfg.mode, auth: Boolean(cfg.key || cfg.mode === 'multi'), tenant: auth?.tenant, realtime: cfg.realtime, hosted: cfg.hosted,
   }));
 
   route('GET', '/api/state', ({ t }) => statePayload(t));
@@ -465,8 +477,9 @@ export function createHub(overrides = {}) {
   // An agent with nothing left to do waits here instead of ending its turn. It
   // returns the moment the human writes to it from the board (a steer) or decides
   // one of its proposals, so the human never has to type into the agent's terminal.
-  route('GET', '/api/wait', async ({ t, who, query, res }) => {
+  route('GET', '/api/wait', async ({ t, who, query, res, req, auth }) => {
     if (who === 'human') throw new HttpError(400, 'wait is for agents; send X-Recon-Agent');
+    if (cfg.hosted && overrides.sleepFresh) return hostedWait({ t, who, query, req, auth });
     const store = t.store;
     const agent = store.get('agent', who);
     const now = Date.now();
@@ -502,6 +515,47 @@ export function createHub(overrides = {}) {
         : 'The human decided. Act on the choice, tell them what you did with recon_say, then call recon_wait again when you are done.',
     };
   });
+
+  // Hosted, a change made through another server instance raises no event here: poll
+  // the database every two seconds instead, letting other requests through meanwhile.
+  async function hostedWait({ t, who, query, req, auth }) {
+    const huntRef = req.headers['x-recon-hunt'] ? decodeURIComponent(String(req.headers['x-recon-hunt'])) : query.get('hunt');
+    const resolve = () => {
+      const base = tenant(auth.tenant);
+      const st = huntRef ? base.engagements.storeFor(huntRef) : base.store;
+      return { t: huntRef ? Object.assign(Object.create(base), { store: st }) : base, store: st };
+    };
+    let cur = { t, store: t.store };
+    const agentOf = () => cur.store.get('agent', who) || cur.store.get('agent', agentIdFor(who));
+    let agent = agentOf();
+    if (agent.lastWokeAt === undefined) agent.lastWokeAt = Date.now();
+    const since = agent.lastWokeAt;
+    const check = () => [...wakeEvents(cur.store.state, who, since), ...steersElsewhere(cur.t, cur.store, who).filter((x) => x.state === 'open').map((x) => ({ type: 'steer', hunt: x.hunt, id: x.id, action: x.action, note: x.note, at: x.at }))];
+    let events = check();
+    const deadline = Date.now() + Math.min(Math.max(Number(query.get('timeout')) || 25, 1), 25) * 1000;
+    if (!events.length && !agent.waitingSince) { agent.waitingSince = Date.now(); agent.updatedAt = cur.store.tick(); cur.store.emitChange('upsert', 'agent', agent, null); }
+    while (!events.length && Date.now() < deadline) {
+      await overrides.sleepFresh(auth.tenant, 2000);
+      cur = resolve();
+      agent = agentOf();
+      if (!agent) break;
+      events = check();
+    }
+    if (!agent) return { woke: false };
+    cur.store.touchAgent(agent.name, {});
+    if (!events.length) return { woke: false, waitedSince: agent.waitingSince };
+    agent.lastWokeAt = Date.now();
+    stopListening(cur.store, who);
+    return {
+      woke: true,
+      events,
+      next: events.some((e) => e.hunt)
+        ? `The human wrote to you in another hunt ("${events.find((e) => e.hunt).hunt}"). Switch to it with recon_start_engagement, acknowledge the steer there, do what it asks and report back.`
+        : events.some((e) => e.type === 'steer')
+          ? 'The human wrote to you. Acknowledge each steer now (recon_steer state=acknowledged), do what it asks, report back (recon_steer state=addressed response="..."), then call recon_wait again.'
+          : 'The human decided. Act on the choice, tell them what you did with recon_say, then call recon_wait again when you are done.',
+    };
+  }
 
   route('GET', '/api/pulse', ({ t, who }) => {
     if (who === 'human') return { pulse: null, mustDo: [] };
@@ -657,7 +711,7 @@ export function createHub(overrides = {}) {
       suggestions: suggest(s, { limit: 12 }),
       demo: { running: t.demo.running },
       engagements: t.engagements.list(),
-      server: { version: VERSION, mode: cfg.mode, now: Date.now() },
+      server: { version: VERSION, mode: cfg.mode, now: Date.now(), realtime: cfg.realtime, hosted: cfg.hosted },
     };
   }
 
@@ -694,9 +748,9 @@ export function createHub(overrides = {}) {
     if (internal) {
       auth = { tenant: String(req.headers['x-recon-tenant'] || 'default'), role: 'any', agent: null };
     } else if (url.pathname === '/api/health') {
-      try { auth = authenticate(req, url); } catch { auth = null; }
+      try { auth = await authenticate(req, url); } catch { auth = null; }
     } else {
-      auth = authenticate(req, url);
+      auth = await authenticate(req, url);
     }
     const match = routes.find((r) => r.method === req.method && r.re.test(url.pathname));
     if (!match) throw new HttpError(404, `no route for ${req.method} ${url.pathname}`);
@@ -734,16 +788,17 @@ export function createHub(overrides = {}) {
   // hub with nothing installed: claude mcp add --transport http recon https://host/mcp
   async function handleMcp(req, res, url) {
     checkOrigin(req);
-    const auth = authenticate(req, url);
+    const auth = await authenticate(req, url);
     if (req.method === 'GET') { res.writeHead(405, { allow: 'POST, DELETE' }); res.end(); return; }
-    if (req.method === 'DELETE') { mcpSessions.delete(req.headers['mcp-session-id']); res.writeHead(204); res.end(); return; }
+    if (req.method === 'DELETE') { await mcpSessions.delete(req.headers['mcp-session-id']); res.writeHead(204); res.end(); return; }
     if (req.method !== 'POST') throw new HttpError(405, 'use POST');
     let body;
     try { body = JSON.parse(await readBody(req)); } catch { throw new HttpError(400, 'invalid json-rpc body'); }
     const { dispatch } = await import('./mcp.js');
     const t = tenant(auth.tenant);
     let sid = req.headers['mcp-session-id'];
-    let session = sid ? mcpSessions.get(sid) : null;
+    let session = sid ? await mcpSessions.get(sid) : null;
+    if (session && session.tenant !== auth.tenant) session = null;
     const messages = Array.isArray(body) ? body : [body];
     const init = messages.find((m) => m?.method === 'initialize');
     const named = auth.agent || req.headers['x-recon-agent'] || url.searchParams.get('agent');
@@ -751,15 +806,17 @@ export function createHub(overrides = {}) {
     if (init || !session) {
       sid = crypto.randomUUID();
       session = { tenant: auth.tenant, agent: String(named || init?.params?.clientInfo?.name || 'agent').slice(0, 60), at: Date.now() };
-      mcpSessions.set(sid, session);
     }
     if (named) session.agent = String(named).slice(0, 60);
     if (huntAsked) session.hunt = huntAsked;
     session.at = Date.now();
+    // the tools call the hub's own api: over loopback when it listens, in process when hosted
+    const listening = server.listening;
     const host = ['0.0.0.0', '::'].includes(cfg.host) ? '127.0.0.1' : cfg.host.includes(':') ? `[${cfg.host}]` : cfg.host;
     const mk = () => createClient({
-      url: `http://${host}:${server.address().port}`, agent: session.agent, transport: 'mcp', hunt: session.hunt || null,
+      url: listening ? `http://${host}:${server.address().port}` : 'http://recon.internal', agent: session.agent, transport: 'mcp', hunt: session.hunt || null,
       headers: { 'x-recon-internal': internalToken, 'x-recon-tenant': session.tenant },
+      fetch: listening ? globalThis.fetch : inProcessFetch,
     });
     let client = mk();
     const out = [];
@@ -767,10 +824,11 @@ export function createHub(overrides = {}) {
       const r = await dispatch(m, {
         getClient: async () => client,
         onInitialize: () => t.store.touchAgent(session.agent, { transport: 'mcp' }),
-        ctx: { setHunt: (h) => { session.hunt = h; client = mk(); } },
+        ctx: { hosted: cfg.hosted, setHunt: (h) => { session.hunt = h; client = mk(); } },
       });
       if (r) out.push(r);
     }
+    await mcpSessions.set(sid, session);
     if (!out.length) { res.writeHead(202, { 'mcp-session-id': sid }); res.end(); return; }
     const payload = JSON.stringify(Array.isArray(body) ? out : out[0]);
     res.writeHead(200, { 'content-type': 'application/json', 'mcp-session-id': sid, 'cache-control': 'no-store' });
@@ -797,13 +855,31 @@ export function createHub(overrides = {}) {
 
   const server = http.createServer(handle);
 
+  // fetch() against this hub without a socket: used by the MCP tools when hosted.
+  async function inProcessFetch(input, init = {}) {
+    const u = new URL(String(input));
+    const res = await dispatchCaptured({ method: init.method || 'GET', url: u.pathname + u.search, headers: Object.fromEntries(Object.entries(init.headers || {}).map(([k, v]) => [k.toLowerCase(), v])), body: init.body || '' });
+    return { ok: res.status < 400, status: res.status, statusText: http.STATUS_CODES[res.status] || '', headers: new Headers(res.headers), text: async () => res.body.toString('utf8'), json: async () => JSON.parse(res.body.toString('utf8')) };
+  }
+
+  // Run a request through the hub and collect the response instead of sending it.
+  async function dispatchCaptured({ method, url, headers = {}, body = '', remoteAddress = '127.0.0.1' }) {
+    const { Readable } = await import('node:stream');
+    const req = Readable.from(body ? [Buffer.from(body)] : []);
+    Object.assign(req, { method, url, headers: { host: headers.host || 'recon.internal', ...headers }, socket: { remoteAddress } });
+    const res = captureResponse();
+    await handle(req, res);
+    await res.done;
+    return { status: res.statusCode, headers: res.headersOut, body: Buffer.concat(res.chunks) };
+  }
+
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://local');
     try {
       if (url.pathname !== '/ws') throw new HttpError(404, 'not found');
       checkHost(req);
       checkOrigin(req);
-      const auth = authenticate(req, url);
+      const auth = authenticateLocal(req, url);
       const t = tenant(auth.tenant);
       const name = url.searchParams.get('agent');
       const client = ws.handleUpgrade(req, socket, head, { tenant: t.id, agent: name || null });
@@ -831,7 +907,7 @@ export function createHub(overrides = {}) {
       }
     }
     for (const c of ws.clients) { if (!c.alive) c.terminate(); else c.ping(); }
-    for (const [id, sess] of mcpSessions) if (Date.now() - sess.at > 24 * 3600_000) mcpSessions.delete(id);
+    mcpSessions.prune?.();
     for (const t of tenants.values()) { try { t.engagements.maybeSnapshot(); } catch (err) { log(`recon: snapshot failed: ${err.message}`); } }
   }, 5000);
   healthTimer.unref();
@@ -842,6 +918,28 @@ export function createHub(overrides = {}) {
     ws,
     tenant,
     tenants,
+    handle,
+    dispatchCaptured,
+    // forget a tenant's in-memory state (it is read again from disk on next use)
+    dropTenant(id) {
+      const t = tenants.get(id);
+      if (!t) return;
+      try {
+        t.demo.stop();
+        for (const w of t.watchers) w.close();
+        // pending debounced saves must not write this stale copy over newer files
+        t.store.dispose?.();
+        for (const s of t.engagements.side?.values?.() || []) s.dispose?.();
+      } catch { /* ignore */ }
+      tenants.delete(id);
+    },
+    // write every pending change of a tenant to disk now
+    flushTenant(id) {
+      const t = tenants.get(id);
+      if (!t) return;
+      t.store.flush();
+      for (const s of t.engagements.side?.values?.() || []) s.flush();
+    },
     async listen() {
       if (cfg.mode !== 'multi') {
         const t = tenant('default');
@@ -874,6 +972,22 @@ function kindOr404(kind) {
 function asArray(v) {
   if (v === undefined || v === null || v === '') return [];
   return Array.isArray(v) ? v : String(v).split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+// A response object that keeps what is written to it.
+function captureResponse() {
+  let resolve;
+  const res = {
+    statusCode: 200, headersOut: {}, chunks: [], headersSent: false,
+    done: new Promise((r) => { resolve = r; }),
+    setHeader(k, v) { this.headersOut[k.toLowerCase()] = v; },
+    getHeader(k) { return this.headersOut[k.toLowerCase()]; },
+    writeHead(status, headers = {}) { this.statusCode = status; for (const [k, v] of Object.entries(headers)) this.headersOut[k.toLowerCase()] = v; this.headersSent = true; return this; },
+    write(chunk) { if (chunk) this.chunks.push(Buffer.from(chunk)); this.headersSent = true; return true; },
+    end(chunk) { if (chunk) this.chunks.push(Buffer.from(chunk)); this.headersSent = true; resolve(); return this; },
+    on() { return this; }, once() { return this; }, off() { return this; }, emit() { return false; },
+  };
+  return res;
 }
 
 function readBody(req, limit = 4 << 20) {

@@ -47,9 +47,10 @@ export async function api(method, path, body) {
   let data = null;
   try { data = await res.json(); } catch { /* empty */ }
   if (!res.ok) {
-    if (res.status === 401) emit({ type: 'auth' });
+    if (res.status === 401) { if (live.hosted) location.href = '/login'; else emit({ type: 'auth' }); }
     throw new ApiError(res.status, data?.error || res.statusText);
   }
+  if (method !== 'GET') pollSoon();
   return data;
 }
 
@@ -72,7 +73,52 @@ let ws = null;
 let backoff = 500;
 let pingTimer = null;
 
-export function connect() {
+// Hosted recon cannot keep a websocket open: it is told so by /api/health and
+// polls instead, cheaply (the server answers 304 when nothing changed).
+export async function connect() {
+  try {
+    const h = await (await fetch('/api/health', { credentials: 'same-origin' })).json();
+    live.hosted = Boolean(h.hosted);
+    if (h.realtime === 'poll') { if (h.hosted && !h.signedIn) { location.href = '/login'; return; } poll(); return; }
+  } catch { /* fall through to the socket */ }
+  connectSocket();
+}
+
+let etag = null;
+async function poll() {
+  try {
+    const res = await fetch('/api/state', { credentials: 'same-origin', headers: etag ? { 'if-none-match': etag } : {} });
+    if (res.status === 401) { if (live.hosted) location.href = '/login'; else emit({ type: 'auth' }); return; }
+    if (res.status === 200) { etag = res.headers.get('etag'); applySnapshot(await res.json()); }
+    if (res.ok || res.status === 304) { if (!live.connected) { live.connected = true; emit({ type: 'status' }); } }
+  } catch {
+    if (live.connected) { live.connected = false; emit({ type: 'status' }); }
+  }
+  setTimeout(poll, document.hidden ? 10000 : 2000);
+}
+// pick up a write you just made without waiting for the next tick
+export function pollSoon() { if (live.hosted) { clearTimeout(pollSoon.t); pollSoon.t = setTimeout(() => fetch('/api/state', { credentials: 'same-origin' }).then(async (r) => { if (r.status === 200) { etag = r.headers.get('etag'); applySnapshot(await r.json()); } }).catch(() => {}), 150); } }
+
+// Turn a full state into the same events the socket sends, so every view reacts alike.
+function applySnapshot(next) {
+  if (!live.state || live.state.project?.id !== next.project?.id) { handle({ t: live.state ? 'reset' : 'hello', state: next }); return; }
+  const seen = new Set(live.state.activity.map((a) => a.id || `${a.at}:${a.by}:${a.summary}`));
+  const fresh = (next.activity || []).filter((a) => !seen.has(a.id || `${a.at}:${a.by}:${a.summary}`));
+  const byItem = new Map(fresh.filter((a) => a.itemId).map((a) => [a.itemId, a]));
+  for (const [kind, items] of Object.entries(next.items)) {
+    const cur = live.state.items[kind] || {};
+    for (const [id, item] of Object.entries(items)) if (!cur[id] || cur[id].updatedAt !== item.updatedAt) handle({ t: 'change', op: 'upsert', kind, item, activity: byItem.get(id) || null });
+    for (const [id, item] of Object.entries(cur)) if (!items[id]) handle({ t: 'change', op: 'remove', kind, item, activity: null });
+  }
+  for (const a of fresh) if (!a.itemId) { live.state.activity.push(a); }
+  if (JSON.stringify(next.project) !== JSON.stringify(live.state.project)) handle({ t: 'project', project: next.project });
+  handle({ t: 'health', health: next.health });
+  if (JSON.stringify(next.suggestions) !== JSON.stringify(live.state.suggestions)) handle({ t: 'suggestions', list: next.suggestions });
+  live.state.engagements = next.engagements;
+  live.state.server = next.server;
+}
+
+function connectSocket() {
   const key = getKey();
   const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws${key ? `?token=${encodeURIComponent(key)}` : ''}`;
   ws = new WebSocket(url);
@@ -89,7 +135,7 @@ export function connect() {
   ws.onclose = () => {
     clearInterval(pingTimer);
     if (live.connected) { live.connected = false; emit({ type: 'status' }); }
-    setTimeout(connect, backoff);
+    setTimeout(connectSocket, backoff);
     backoff = Math.min(backoff * 1.7, 8000);
   };
   ws.onerror = () => {

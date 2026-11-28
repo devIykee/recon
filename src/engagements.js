@@ -19,8 +19,9 @@ const SNAPSHOT_EVERY = HOUR;
 const KEEP_ALL_FOR = 48 * HOUR;
 
 export class Engagements {
-  constructor(dir, store, { seed = 'example', log = () => {}, encryptionKey = null } = {}) {
+  constructor(dir, store, { seed = 'example', log = () => {}, encryptionKey = null, snapshots = true } = {}) {
     this.dir = dir;
+    this.snapshotsOn = snapshots;
     this.store = store;
     this.encryptionKey = encryptionKey;
     // Hunts other than the one on screen that an agent is working in right now.
@@ -247,6 +248,7 @@ export class Engagements {
   }
 
   snapshot({ force = false, now = Date.now(), store = this.store } = {}) {
+    if (!this.snapshotsOn) return null;
     const main = store === this.store;
     if (main && !force && store.rev === this.lastSnapshotRev) return null;
     const id = store.state.project.id;
