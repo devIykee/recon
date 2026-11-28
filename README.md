@@ -9,6 +9,8 @@ can't see its progress, can't check what it did, and can't hand it the
 live, human-readable board. The agents do the tireless scanning, you bring
 intuition and judgement, and each side sees the other's work as it happens.
 
+**Use it in the browser:** [recon-alpha-eight.vercel.app](https://recon-alpha-eight.vercel.app). Sign up with a passkey, connect your agents with an API key. Or run it on your own machine (below), where nothing leaves it.
+
 ![The engagement at a glance, with what needs you on the right](docs/img/map.jpg)
 
 ## Start in one line
