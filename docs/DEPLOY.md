@@ -110,13 +110,16 @@ start a local command. Keys are stored only as sha256 hashes.
    served as a static file.
 2. In the project, open **Storage → Create → Neon** and connect it to the
    project. That sets `DATABASE_URL`. Tables are created on the first request.
-3. Add two environment variables:
-   - `RECON_SECRET`: at least 32 random characters (`openssl rand -hex 32`).
-     It signs session cookies and passkey challenges. Changing it signs
+3. Optionally add these environment variables (a deploy works without them):
+   - `RECON_SECRET` (optional): at least 32 random characters
+     (`openssl rand -hex 32`). It signs session cookies and passkey challenges.
+     Without it recon derives one from the database URL. Changing either signs
      everyone out; nothing else is lost.
-   - `RECON_ORIGIN`: the site's public origin, such as `https://recon.example.com`.
-     Passkeys are bound to this domain. If you later move to another domain,
-     existing passkeys stop working there and people use their recovery code.
+   - `RECON_ORIGIN` (optional): the site's public origin, such as
+     `https://recon.example.com`. Without it recon uses the project's production
+     domain that Vercel provides. Passkeys are bound to this domain: if you later
+     move to another one, existing passkeys stop working there and people use
+     their recovery code. Set your custom domain before people sign up.
 4. Deploy. Visit the site, create an account, open the board, connect an agent.
 
 Run the same thing on your machine with `recon cloud` (port 4318). Without
