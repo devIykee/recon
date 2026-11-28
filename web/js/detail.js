@@ -14,6 +14,7 @@ import {
 } from './labels.js';
 import { openSteerComposer, authorAvatar } from './steer.js';
 import { storyFor } from './story.js';
+import { prose } from './prose.js';
 import { bus, loadPlaybook } from './bus.js';
 
 const TEXT_FIELD = { component: 'reasoning', assumption: 'rationale', hypothesis: 'reasoning', finding: 'notes', target: 'description' };
@@ -487,7 +488,7 @@ export function steerMini(s) {
     h('div.steer-top', icon(meta.icon), h('b', meta.label), '→', to,
       h('span.right', h(`span.state-pill.${s.state}`, { 'data-tip': STEER_STATE[s.state].hint }, STEER_STATE[s.state].label))),
     s.note ? h('div.steer-note', s.note) : null,
-    s.response ? h('div.steer-response', icon('message'), s.response) : null);
+    s.response ? h('div.steer-response', icon('message'), ...prose(s.response)) : null);
 }
 
 function evidenceForm(getItem) {

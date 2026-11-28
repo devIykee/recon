@@ -6,6 +6,7 @@ import { live, list, byId, titleOf, authorName, post, write, get, patch, healthO
 import { STEER, STEER_STATE, ACTION_LABEL, KIND_ICON, LEAD_STATE, VALUE } from './labels.js';
 import { authorAvatar, openSteerComposer } from './steer.js';
 import { bus } from './bus.js';
+import { prose } from './prose.js';
 
 const TABS = [
   { id: 'next', label: 'For you', icon: 'sparkle' },
@@ -61,7 +62,7 @@ export function createSidebar(root) {
       .slice(-120).reverse();
     keyed(p.querySelector('.feed'), items, (a) => a.id, (a) => {
       const el = h('div.feed-item', authorAvatar(a.by),
-        h('div', h('div.feed-line', h('b', authorName(a.by)), ' ', a.summary),
+        h('div', h('div.feed-line', h('b', authorName(a.by)), ' ', ...prose(a.summary)),
           h('div.feed-meta', h(`span.verb.${a.action}`, ACTION_LABEL[a.action] || a.action), a.kind && a.kind !== 'project' ? h('span', a.kind) : null, timeEl(a.at))));
       if (a.itemId) el.addEventListener('click', () => bus.open(a.itemId));
       return el;
@@ -113,7 +114,7 @@ export function createSidebar(root) {
           ...[0, 1, 2].map((i) => h(`i${i <= stage ? '.on' : ''}`))))),
       s.note ? h('div.steer-note', s.note) : null,
       item ? h('div.steer-item', { on: { click: () => bus.open(item.id) } }, icon(KIND_ICON[item.kind]), titleOf(item)) : null,
-      s.response ? h('div.steer-response', authorAvatar(s.addressedBy || s.lastTouchedBy), s.response) : null,
+      s.response ? h('div.steer-response', authorAvatar(s.addressedBy || s.lastTouchedBy), ...prose(s.response)) : null,
       h('div.steer-foot',
         h(`span.state-pill.${s.state}`, { 'data-tip': STEER_STATE[s.state].hint }, STEER_STATE[s.state].label),
         s.state === 'addressed'
@@ -227,7 +228,7 @@ export function createSidebar(root) {
       const item = byId(x.itemId);
       const options = (x.options || []).filter(Boolean);
       setChildren(el,
-        h('div.sug-title', authorAvatar(x.createdBy), h('span', h('b', authorName(x.createdBy)), options.length ? ' asks: ' : ' proposes: ', x.text)),
+        h('div.sug-title', authorAvatar(x.createdBy), h('span', h('b', authorName(x.createdBy)), options.length ? ' asks: ' : ' proposes: ', ...prose(x.text))),
         x.rationale ? h('div.sug-why', x.rationale) : null,
         item ? h('div.sug-why', h('span.steer-item', { on: { click: () => bus.open(item.id) } }, icon(KIND_ICON[item.kind]), titleOf(item))) : null,
         x.state === 'pending'
@@ -288,7 +289,7 @@ export function createSidebar(root) {
         const rel = byId(l.itemId) || byId(l.componentId);
         setChildren(card,
           h('div.steer-top', h(`span.chip.value-${l.value}`, VALUE[l.value]), h('span.right', authorAvatar(l.createdBy))),
-          h('div.steer-note', l.text),
+          h('div.steer-note', ...prose(l.text)),
           l.why ? h('div.sug-why', { style: { margin: '4px 0 0' } }, l.why) : null,
           l.blockedBy ? h('div.steer-response', icon('alert'), `Blocked: ${l.blockedBy}`) : null,
           l.nextStep ? h('div.steer-response', icon('arrow'), `Next: ${l.nextStep}`) : null,
@@ -389,7 +390,7 @@ export function createSidebar(root) {
   function bubble(side, name, text, at, extra, item, author) {
     return h(`div.bubble.${side}`,
       h('div.bubble-head', side === 'agent' ? authorAvatar(author) : null, h('b', name), h('span.t', timeEl(at)), extra ? h('span.right', extra) : null),
-      h('div.bubble-text', text),
+      h('div.bubble-text', ...prose(text)),
       item && item.kind !== 'steer' ? h('div.steer-item', { on: { click: () => bus.open(item.id) } }, icon(KIND_ICON[item.kind]), titleOf(item)) : null);
   }
 
@@ -397,8 +398,8 @@ export function createSidebar(root) {
     const options = (x.options || []).filter(Boolean);
     return h('div.bubble.agent.ask',
       h('div.bubble-head', authorAvatar(x.createdBy), h('b', authorName(x.createdBy)), h('span.t', timeEl(x.createdAt))),
-      h('div.bubble-text', x.text),
-      x.rationale ? h('div.sug-why', x.rationale) : null,
+      h('div.bubble-text', ...prose(x.text)),
+      x.rationale ? h('div.sug-why', ...prose(x.rationale)) : null,
       x.state === 'pending'
         ? h('div.sug-actions.options', ...(options.length
           ? options.map((o, i) => h(`button.btn.btn-xs${i === 0 ? '.btn-primary' : ''}`, { on: { click: () => decide(x, 'accept', o) } }, o))

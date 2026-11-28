@@ -13,6 +13,7 @@ import { bus, loadGlossary } from './bus.js';
 import { isTyping } from './canvas.js';
 import { avatar } from './steer.js';
 import { openReport, openEngagements, openSkills } from './panels.js';
+import { plainProse } from './prose.js';
 
 const app = document.getElementById('app');
 const $ = (id) => document.getElementById(id);
@@ -498,9 +499,9 @@ function notify({ kind, item, prev, activity }) {
   if (!activity || activity.by?.startsWith('human')) return;
   if (kind === 'steer' && prev && prev.state !== item.state && item.createdBy?.startsWith('human')) {
     if (item.state === 'acknowledged') toast(`${authorName(activity.by)} saw your steer${item.note ? `: "${truncateText(item.note, 50)}"` : ''}`);
-    if (item.state === 'addressed') toast(`${authorName(activity.by)} reported back: ${truncateText(item.response || 'done', 80)}`, 'ok');
+    if (item.state === 'addressed') toast(`${authorName(activity.by)} reported back: ${truncateText(plainProse(item.response || 'done'), 80)}`, 'ok');
   }
-  if (kind === 'proposal' && !prev) toast(`${authorName(activity.by)} proposes: ${truncateText(item.text, 80)} — open Next to answer`);
+  if (kind === 'proposal' && !prev) toast(`${authorName(activity.by)} proposes: ${truncateText(plainProse(item.text), 80)} — open Next to answer`);
   if (kind === 'agent' && !prev) toast(`${item.name} connected over ${item.transport}`, 'ok');
   if (kind === 'message' && !prev && sidebar.tab !== 'talk') toast(`${authorName(activity.by)}: ${truncateText(item.text, 90)} — open Talk to answer`);
 }

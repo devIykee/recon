@@ -122,8 +122,21 @@ export function reportedMatch(state, f) {
 const list = (xs) => xs.map((x) => `- ${x}`).join('\n');
 
 // Throws a GateError explaining what to do instead. `next` is the item as it would be after the write.
+// What is left of a text once ids are taken out: the part a person can read.
+const ID_RE = /\b(?:ag|tg|cp|rl|as|hy|fd|ch|st|pr|ld|ms|ru|sg|it)_[a-z0-9]{6,}\b/g;
+export const readableLetters = (text) => String(text ?? '').replace(ID_RE, '').replace(/[^\p{L}\p{N}]+/gu, '').length;
+
 export function enforce(state, kind, next, changed, author, { created = false } = {}) {
   if (isHuman(author)) return;
+
+  // The human reads these in the Talk panel. An id alone tells them nothing (and a reply
+  // that says nothing must not count as reporting back on a steer).
+  const said = kind === 'message' && created ? ['text', next.text]
+    : kind === 'proposal' && created ? ['text', next.text]
+      : kind === 'steer' && changed.includes('response') && next.response ? ['response', next.response] : null;
+  if (said && readableLetters(said[1]) < 3) {
+    throw new GateError(`the ${said[0]} "${String(said[1]).slice(0, 60)}" has no words in it, only ids. The human reads this on the board and cannot read ids: write what you want to tell them in plain words, e.g. what you did, what you found, or what you will do next.${kind === 'message' ? ' To answer a steer, put its id in replyTo, not in the text.' : ''}`, 'no-words');
+  }
   const steers = openSteersFor(state, author);
   const gated = (kind === 'finding' && !(changed.length === 1 && changed[0] === 'evidence'))
     || (kind === 'chain')

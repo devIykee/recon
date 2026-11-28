@@ -61,6 +61,22 @@ test('steer round trip and briefing', async () => {
   assert.equal(done.body.response, 'fees fine');
 });
 
+test('agents must say something in words, not just ids', async () => {
+  const steer = await call('POST', '/api/items/steer', { action: 'cover', note: 'try to break the deposit rule', to: ['ag_wordy'] });
+  await call('POST', `/api/steers/${steer.body.id}/ack`, {}, agent('wordy'));
+  const bare = await call('POST', '/api/items/message', { text: steer.body.id }, agent('wordy'));
+  assert.equal(bare.status, 422, 'a message that is only an id is refused');
+  assert.match(bare.body.error, /replyTo/);
+  const replyBare = await call('POST', '/api/items/message', { text: ` ${steer.body.id}. `, replyTo: steer.body.id }, agent('wordy'));
+  assert.equal(replyBare.status, 422, 'a reply that says nothing does not count as reporting back');
+  const ok = await call('POST', '/api/items/message', { text: `Writing the invariant test for ${steer.body.id} now`, replyTo: steer.body.id }, agent('wordy'));
+  assert.ok(ok.status < 300, 'words around an id are fine');
+  const doneBare = await call('POST', `/api/steers/${steer.body.id}/address`, { response: steer.body.id }, agent('wordy'));
+  assert.equal(doneBare.status, 422, 'a steer response that is only an id is refused');
+  const done = await call('POST', `/api/steers/${steer.body.id}/address`, { response: 'The rule holds for 50k calls' }, agent('wordy'));
+  assert.equal(done.status, 200);
+});
+
 test('proposals: agent proposes, human accepts, steer goes back', async () => {
   const p = await call('POST', '/api/items/proposal', { text: 'fuzz swap()' }, agent('hound'));
   const nope = await call('POST', `/api/proposals/${p.body.id}/accept`, {}, agent('hound'));
