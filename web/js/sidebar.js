@@ -83,40 +83,47 @@ export function createSidebar(root) {
     }
     const groups = p.querySelector('.steer-groups');
     const all = list('steer').sort((a, b) => b.updatedAt - a.updatedAt);
-    const by = { open: [], acknowledged: [], addressed: [] };
-    for (const s of all) by[s.state].push(s);
+    const order = ['open', 'acknowledged', 'queued', 'waiting-on-human', 'addressed'];
+    const by = { open: [], acknowledged: [], queued: [], 'waiting-on-human': [], addressed: [] };
+    for (const s of all) (by[s.state] || by.open).push(s);
     by.addressed = by.addressed.slice(0, 15);
-    keyed(groups, ['open', 'acknowledged', 'addressed'], (g) => g, (g) => h('div', h('div.group-label'), h('div.steer-list')), (el, g) => {
+    keyed(groups, order, (g) => g, (g) => h('div', h('div.group-label'), h('div.steer-list')), (el, g) => {
       setChildren(el.querySelector('.group-label'), STEER_STATE[g].label, h('span', `· ${by[g].length}`), h('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0 } }, `— ${STEER_STATE[g].hint.toLowerCase()}`));
       el.hidden = !by[g].length;
       keyed(el.querySelector('.steer-list'), by[g], (s) => s.id, () => h('div.steer'), (card, s) => {
         const prev = steerStates.get(s.id);
         if (prev && prev !== s.state) { card.classList.remove('flip'); void card.offsetWidth; card.classList.add('flip'); }
         steerStates.set(s.id, s.state);
-        if (card._v === s.updatedAt) return;
-        card._v = s.updatedAt;
+        const dlv = live.state?.steerDeliveries?.[s.id];
+        const sig = `${s.updatedAt}|${dlv?.status || ''}|${dlv?.attempt || ''}`;
+        if (card._v === sig) return;
+        card._v = sig;
         card.dataset.state = s.state;
-        renderSteerCard(card, s);
+        renderSteerCard(card, s, dlv);
       });
     });
     if (!all.length && !p.querySelector('.empty')) p.append(h('div.empty', h('span.hand', 'No steers yet'), 'Open any item and use Steer to point an agent at it.'));
     else if (all.length) p.querySelector('.empty')?.remove();
   }
 
-  function renderSteerCard(card, s) {
+  function renderSteerCard(card, s, dlv) {
     const meta = STEER[s.action] || STEER.note;
     const item = byId(s.itemId);
     const to = (s.to || []).includes('all') ? 'everyone' : (s.to || []).map(authorName).join(', ');
-    const stage = ['open', 'acknowledged', 'addressed'].indexOf(s.state);
+    const stage = { open: 0, queued: 1, acknowledged: 1, 'waiting-on-human': 2, addressed: 2 }[s.state] ?? 0;
+    const stInfo = STEER_STATE[s.state] || STEER_STATE.open;
+    const dlvTip = dlv ? `Webhook: ${dlv.status}${dlv.httpStatus ? ` (HTTP ${dlv.httpStatus})` : ''}${dlv.error ? ` - ${dlv.error}` : ''}` : '';
     setChildren(card,
       h('div.steer-top', icon(meta.icon), h('b', meta.label), h('span', `→ ${to}`),
         h('span.right', h('span.track', { style: { color: s.state === 'addressed' ? 'var(--ok)' : s.state === 'acknowledged' ? 'var(--warn)' : 'var(--st-flagged)' } },
           ...[0, 1, 2].map((i) => h(`i${i <= stage ? '.on' : ''}`))))),
       s.note ? h('div.steer-note', s.note) : null,
       item ? h('div.steer-item', { on: { click: () => bus.open(item.id) } }, icon(KIND_ICON[item.kind]), titleOf(item)) : null,
+      s.waitingReason && s.state === 'waiting-on-human' ? h('div.steer-response', h('b', 'Waiting on you: '), ...prose(s.waitingReason)) : null,
       s.response ? h('div.steer-response', authorAvatar(s.addressedBy || s.lastTouchedBy), ...prose(s.response)) : null,
       h('div.steer-foot',
-        h(`span.state-pill.${s.state}`, { 'data-tip': STEER_STATE[s.state].hint }, STEER_STATE[s.state].label),
+        h(`span.state-pill.${s.state}`, { 'data-tip': stInfo.hint }, stInfo.label),
+        dlv ? h(`span.pill${dlv.status === 'failed' || dlv.status === 'retrying' ? '.pill-warn' : ''}`, { 'data-tip': dlvTip }, `webhook: ${dlv.status}`) : null,
         s.state === 'addressed'
           ? h('button.btn.btn-xs.btn-ghost', { on: { click: () => post(`/api/steers/${s.id}/reopen`).catch((e) => toast(e.message, 'error')) } }, 'Reopen')
           : h('button.btn.btn-xs.btn-ghost', { on: { click: () => write.remove('steer', s.id).catch((e) => toast(e.message, 'error')) } }, 'Withdraw'),
@@ -151,8 +158,7 @@ export function createSidebar(root) {
         ],
       });
     }
-    const lastChange = Math.max(0, ...list('finding').map((f) => f.updatedAt));
-    if (cfg.shape && cfg.last && cfg.last.at < lastChange && rep?.included.length) {
+    if (cfg.shape && rep?.stale?.length && rep?.included?.length) {
       cards.push({ key: 'report-stale', icon: 'file', title: 'Findings changed since the report was written', why: `The ${cfg.shape} report is out of date.`, actions: [{ label: 'Open report', primary: true, run: () => bus.report?.() }] });
     }
     for (const a of list('agent')) {

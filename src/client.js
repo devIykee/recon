@@ -15,8 +15,36 @@ export function defaultUrl(env = process.env) {
   return (env.RECON_URL || `http://127.0.0.1:${env.RECON_PORT || DEFAULT_PORT}`).replace(/\/$/, '');
 }
 
+const LOCAL_RE = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i;
+const TRANSIENT_CODES = new Set(['UND_ERR_CONNECT_TIMEOUT', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'EPIPE']);
+const RETRY_HTTP = new Set([502, 503, 504]);
+
+export function parseUrls(url) {
+  return String(url || '').split(',').map((u) => u.trim().replace(/\/$/, '')).filter(Boolean);
+}
+
+function diagnoseUnreachable(base, err) {
+  const code = err?.cause?.code || err?.code || '';
+  const msg = code || err?.message || 'network error';
+  if (LOCAL_RE.test(base)) return `cannot reach the local recon hub at ${base} (${msg}). Start it with: recon serve`;
+  if (/ngrok/i.test(base)) return `cannot reach the ngrok tunnel at ${base} (${msg}). Tunnels go offline; use your hosted Vercel URL or pass fallback URLs in RECON_URL.`;
+  return `cannot reach the recon hub at ${base} (${msg}). Check your network or run: recon doctor`;
+}
+
+function diagnoseHttpError(base, res, text, data) {
+  if (/ERR_NGROK_/i.test(text) || (/ngrok/i.test(base) && /<!doctype html|<html/i.test(text))) {
+    return `ngrok tunnel at ${base} is offline (${text.match(/ERR_NGROK_\d+/)?.[0] || res.status}). Switch RECON_URL to your hosted board URL or run: recon doctor`;
+  }
+  if (res.status === 401) return data?.error || `unauthorized (401) at ${base}: check RECON_KEY / Bearer token`;
+  if (res.status === 403) return data?.error || `forbidden (403) at ${base}`;
+  if (typeof data === 'object' && data?.error) return data.error;
+  return `${res.status} ${res.statusText}`;
+}
+
 export function createClient({ url = defaultUrl(), key = process.env.RECON_KEY, agent = null, transport = 'cli', model = null, hunt = null, headers: extra = {}, fetch: fetchImpl = globalThis.fetch } = {}) {
-  const base = url.replace(/\/$/, '');
+  const urls = parseUrls(url);
+  let activeIdx = 0;
+  const base = urls[0] || defaultUrl();
 
   async function req(method, path, body) {
     const headers = { accept: 'application/json', ...extra };
@@ -25,17 +53,46 @@ export function createClient({ url = defaultUrl(), key = process.env.RECON_KEY, 
     if (agent) { headers['x-recon-agent'] = agent; headers['x-recon-transport'] = transport; }
     if (model) headers['x-recon-model'] = model;
     if (body !== undefined) headers['content-type'] = 'application/json';
-    let res;
-    try {
-      res = await fetchImpl(base + path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
-    } catch (err) {
-      throw new ReconError(0, `cannot reach the recon hub at ${base} (${err.cause?.code || err.message}). start it with: recon serve`);
+    const payload = body !== undefined ? JSON.stringify(body) : undefined;
+    const isSafeRetry = method === 'GET' || method === 'HEAD';
+
+    let lastErr = null;
+    for (let uOff = 0; uOff < urls.length; uOff++) {
+      const idx = (activeIdx + uOff) % urls.length;
+      const target = urls[idx];
+      const maxTries = isSafeRetry ? 3 : 1;
+      for (let attempt = 0; attempt < maxTries; attempt++) {
+        let res;
+        try {
+          res = await fetchImpl(target + path, { method, headers, body: payload });
+        } catch (err) {
+          lastErr = new ReconError(0, diagnoseUnreachable(target, err));
+          const code = err?.cause?.code || err?.code || '';
+          if (attempt + 1 < maxTries && (TRANSIENT_CODES.has(code) || !LOCAL_RE.test(target))) {
+            await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+            continue;
+          }
+          break; // try next fallback URL if any
+        }
+        const text = await res.text();
+        let data = null;
+        try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+        const ngrokDead = /ERR_NGROK_/i.test(text) || (/ngrok/i.test(target) && res.status >= 400 && /<!doctype html|<html/i.test(text));
+        if (ngrokDead || RETRY_HTTP.has(res.status)) {
+          lastErr = new ReconError(res.status, diagnoseHttpError(target, res, text, data), data?.details);
+          if (!ngrokDead && attempt + 1 < maxTries) {
+            await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+            continue;
+          }
+          break; // try next fallback URL if any
+        }
+        if (!res.ok) throw new ReconError(res.status, diagnoseHttpError(target, res, text, data), data?.details);
+        activeIdx = idx;
+        api.url = target;
+        return data;
+      }
     }
-    const text = await res.text();
-    let data = null;
-    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-    if (!res.ok) throw new ReconError(res.status, data?.error || `${res.status} ${res.statusText}`, data?.details);
-    return data;
+    throw lastErr || new ReconError(0, `cannot reach any recon hub (${urls.join(', ')})`);
   }
 
   const api = {
@@ -68,6 +125,9 @@ export function createClient({ url = defaultUrl(), key = process.env.RECON_KEY, 
     update: (kind, id, fields) => req('PATCH', `/api/items/${kind}/${encodeURIComponent(id)}`, fields),
     remove: (kind, id) => req('DELETE', `/api/items/${kind}/${encodeURIComponent(id)}`),
     evidence: (kind, id, ev) => req('POST', `/api/items/${kind}/${encodeURIComponent(id)}/evidence`, ev),
+    removeEvidence: (kind, id, eid) => req('DELETE', `/api/items/${kind}/${encodeURIComponent(id)}/evidence/${encodeURIComponent(eid)}`),
+    webhookStatus: (agentId) => req('GET', `/api/agents/${encodeURIComponent(agentId)}/webhook`),
+    webhookDeliveries: (agentId, limit = 20) => req('GET', `/api/agents/${encodeURIComponent(agentId)}/webhook/deliveries?limit=${limit}`),
     steer: (id, verb, response) => req('POST', `/api/steers/${encodeURIComponent(id)}/${verb}`, response ? { response } : {}),
     proposal: (id, verb, choice) => req('POST', `/api/proposals/${encodeURIComponent(id)}/${verb}`, choice ? { choice } : {}),
     claim: (ids) => req('POST', '/api/claim', { componentIds: ids }),

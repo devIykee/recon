@@ -23,7 +23,7 @@ export const ENUMS = Object.freeze({
   severity: ['critical', 'high', 'medium', 'low', 'info'],
   findingStage: ['recon', 'testing', 'reported', 'acknowledged', 'fixed', 'disclosed'],
   steerKind: ['recheck', 'challenge', 'cover', 'verify', 'priority', 'note'],
-  steerState: ['open', 'acknowledged', 'addressed'],
+  steerState: ['open', 'queued', 'acknowledged', 'waiting-on-human', 'addressed'],
   proposalState: ['pending', 'accepted', 'declined'],
   leadState: ['open', 'blocked', 'done', 'dropped'],
   ruleCategory: ['conservation', 'solvency', 'accounting', 'bound', 'access', 'ordering', 'other'],
@@ -88,6 +88,8 @@ export const SCHEMA = {
     focusItem: str(),
     assignment: arr(H),
     model: str(),
+    // non-secret summary of webhook wake configuration & last delivery status
+    wake: obj(),
   },
   target: {
     name: str(A, { required: true }),
@@ -102,8 +104,11 @@ export const SCHEMA = {
     outOfScope: str(),
     alreadyReported: arr(),
     disclosureChannel: str(),
+    securityContact: str(),
     severityScale: str(),
     bountyRules: str(),
+    repoUrl: str(),
+    commit: str(),
     playbooks: arr(),
     ignoredClasses: arr(),
   },
@@ -177,6 +182,8 @@ export const SCHEMA = {
     productionNote: str(),
     // a concrete change an engineer could implement from the description
     fix: str(),
+    // if this finding is the same root cause as another finding, fold it into that parent
+    foldedInto: str(A, { ref: 'finding' }),
   },
   // Several weaker issues that combine into a stronger one.
   chain: {
@@ -196,6 +203,7 @@ export const SCHEMA = {
     state: en('steerState', A, 'open'),
     note: str(),
     response: str(),
+    waitingReason: str(),
   },
   proposal: {
     text: str(A, { required: true }),
@@ -206,6 +214,8 @@ export const SCHEMA = {
     options: arr(),
     choice: str(),
     state: en('proposalState', A, 'pending'),
+    // optional state mutation applied automatically when the human accepts (e.g. { report: { shape: 'combined' } })
+    onAccept: obj(),
   },
   // What an agent says to the human: a reply, an update, a question. Humans talk
   // to agents with steers, which agents must acknowledge.
@@ -349,26 +359,43 @@ let evSeq = 0;
 export function normalizeEvidence(list, author) {
   return list.map((e) => {
     if (typeof e === 'string') e = { ref: e };
-    const kind = ENUMS.evidenceKind.includes(e.kind) ? e.kind : guessEvidenceKind(e.ref || '');
+    const ref = String(e.ref || '').slice(0, 2000);
+    if (looksCollapsedRef(ref)) {
+      throw new ValidationError(`evidence ref "${ref.slice(0, 80)}" looks like multiple refs joined with "|". Attach each evidence entry separately (CLI: pass --evidence once per item, e.g. --evidence "code:file.sol:10|note" --evidence "fork:test_X|note").`);
+    }
+    const kind = ENUMS.evidenceKind.includes(e.kind) ? e.kind : guessEvidenceKind(ref);
+    const env = Array.isArray(e.env) ? e.env.map((x) => String(x).slice(0, 80)).filter(Boolean).slice(0, 20) : undefined;
     return {
       id: e.id || `ev_${Date.now().toString(36)}${(evSeq++).toString(36)}`,
       kind,
-      ref: String(e.ref || '').slice(0, 2000),
+      ref,
       note: String(e.note || '').slice(0, 8000),
       ...(e.rpc ? { rpc: String(e.rpc).slice(0, 300) } : {}),
       ...(e.block ? { block: String(e.block).slice(0, 40) } : {}),
       ...(e.result ? { result: String(e.result).slice(0, 40) } : {}),
+      ...(e.command ? { command: String(e.command).slice(0, 1000) } : {}),
+      ...(env?.length ? { env } : {}),
       by: e.by || author || 'unknown',
       at: e.at || Date.now(),
     };
   });
 }
 
-function guessEvidenceKind(ref) {
+function looksCollapsedRef(ref) {
+  if (!ref || !ref.includes('|')) return false;
+  const parts = ref.split('|').map((s) => s.trim()).filter(Boolean);
+  if (parts.length < 2) return false;
+  const refLike = (s) => /^https?:\/\/|^0x[0-9a-f]{64}$|^test[_A-Z]|[\w/.-]+\.(sol|rs|move|vy|go|ts|js|py|cairo)(:\d+)?|\bfork\b/i.test(s);
+  return parts.filter(refLike).length >= 2;
+}
+
+export function guessEvidenceKind(ref) {
   if (/^0x[0-9a-f]{64}$/i.test(ref)) return 'tx';
+  if (/\bfork\b|--fork-url|mainnet[- ]fork|\bcast\s+(call|eth_call)\b|\beth_call\b/i.test(ref)) return 'fork';
   if (/^test[_A-Z]|\.t\.sol|forge test|::test/.test(ref)) return 'test';
   if (/^https?:\/\//.test(ref)) return 'link';
   if (/[\w/.-]+\.(sol|rs|move|vy|go|ts|js|py|cairo)(:\d+)?/.test(ref) || /::|\(\)|#L\d+/.test(ref)) return 'code';
+  if (/\.(log|txt)$|\b(trace|stdout|stderr)\b/i.test(ref)) return 'log';
   return 'note';
 }
 

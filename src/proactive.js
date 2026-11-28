@@ -6,9 +6,10 @@
 // miss (the human was pointing at the bug), then disputes, then claims without
 // proof, then loose ends.
 
-import { openSteersFor, cardGaps, severityProblem, ackedSteersFor, steersBeingIgnored } from './quality.js';
+import { openSteersFor, cardGaps, severityProblem, ackedSteersFor, queuedSteersFor, steersBeingIgnored } from './quality.js';
 import { phaseStatus } from './knowledge.js';
 import { ruleExposure, ENGINE_HINTS } from './rules.js';
+import { buildReport } from './report.js';
 
 const OVERDUE = 30 * 60_000;
 const name = (it) => it?.name || it?.title || it?.text || it?.note || it?.id || '';
@@ -36,6 +37,9 @@ export function mustDo(state, agentId, now = Date.now()) {
   for (const s of ackedSteersFor(state, agentId)) {
     const overdue = ignored.has(s.id) || now - (s.ackAt || s.updatedAt) > OVERDUE;
     add('address', s, `${overdue ? 'OVERDUE, other work is refused until you answer: ' : 'the human asked, work this now: '}steer ${s.id}: ${short(s.note, 100)}`, `do it, then recon_steer state=addressed response="..." (progress: recon_say replyTo=${s.id})`, { urgent: true });
+  }
+  for (const s of queuedSteersFor(state, agentId)) {
+    add('queued', s, `queued steer ${s.id}: ${short(s.note, 90)}`, 'recon_steer state=acknowledged when you start it, or state=addressed when done');
   }
 
   for (const c of Object.values(items.component)) {
@@ -69,9 +73,18 @@ export function mustDo(state, agentId, now = Date.now()) {
   }
 
   const report = state.project.report || {};
-  const reportable = Object.values(items.finding).filter((f) => !cardGaps(f).length);
-  const lastFindingChange = Math.max(0, ...Object.values(items.finding).map((f) => f.updatedAt));
-  if (reportable.length && report.shape && (!report.last || report.last.at < lastFindingChange)) {
+  const rep = buildReport(state);
+  const includedIds = new Set(rep.included.map((f) => f.id));
+  const reportable = Object.values(items.finding).filter((f) => !f.foldedInto && !cardGaps(f).length);
+  const HYGIENE_FIELDS = new Set(['alreadyReported', 'alreadyReportedRef', 'foldedInto', 'verification', 'priority', 'stage']);
+  const substantiveUpdatedAt = (f) => {
+    if (!f?._f || !Object.keys(f._f).length) return f?.updatedAt || 0;
+    const times = Object.entries(f._f).filter(([k]) => !HYGIENE_FIELDS.has(k)).map(([, v]) => v?.at || 0);
+    return times.length ? Math.max(...times) : (f.createdAt || 0);
+  };
+  const includedFindings = Object.values(items.finding).filter((f) => includedIds.has(f.id));
+  const lastFindingChange = Math.max(0, ...includedFindings.map(substantiveUpdatedAt));
+  if (includedFindings.length && report.shape && (!report.last || report.last.at < lastFindingChange)) {
     add('report', null, `findings changed since the report was last written: rewrite the ${report.shape} report${report.path ? ` at ${report.path}` : ''}`, 'recon_write_report, write it, then recon_submit_report');
   }
   if (reportable.length && report.shape && !report.signOff) {
@@ -116,7 +129,7 @@ export function pulse(state, agentId, now = Date.now()) {
 // What must not be lost before the agent stops, writes a report, or goes idle.
 export function beforeYouStop(state, agentId) {
   const items = state.items;
-  const steers = Object.values(items.steer).filter((s) => s.state !== 'addressed' && ((s.to || []).includes(agentId) || (s.to || []).includes('all')));
+  const steers = Object.values(items.steer).filter((s) => !['addressed', 'waiting-on-human'].includes(s.state) && ((s.to || []).includes(agentId) || (s.to || []).includes('all')));
   const leads = Object.values(items.lead).filter((l) => l.state === 'open' || l.state === 'blocked');
   const unfinished = Object.values(items.finding).filter((f) => f.createdBy === agentId && cardGaps(f).length);
   const testing = Object.values(items.hypothesis).filter((h) => h.createdBy === agentId && h.status === 'testing');

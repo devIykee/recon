@@ -25,6 +25,20 @@ const SCHEMA = [
      version int not null, updated_at bigint not null, primary key (tenant, path))`,
   `create table if not exists recon_mcp_sessions (
      id text primary key, tenant text not null, agent text, hunt text, at bigint not null)`,
+  `create table if not exists recon_webhooks (
+     tenant text not null, agent_id text not null, url text not null, host text not null,
+     events text not null, auth text not null default 'hmac', secret text not null,
+     prev_secret text, prev_secret_until bigint default 0,
+     status text not null default 'active', last_status text, last_delivery_at bigint,
+     fail_count int not null default 0, created_at bigint not null, updated_at bigint not null,
+     primary key (tenant, agent_id))`,
+  `create table if not exists recon_webhook_deliveries (
+     id text primary key, event_id text not null, tenant text not null, agent_id text not null,
+     type text not null, steer_ids text not null default '[]', payload text not null,
+     attempt int not null default 1, status text not null, http_status int, error text,
+     next_attempt_at bigint, created_at bigint not null, delivered_at bigint)`,
+  'create index if not exists recon_webhook_deliveries_due on recon_webhook_deliveries(status, next_attempt_at)',
+  'create index if not exists recon_webhook_deliveries_agent on recon_webhook_deliveries(tenant, agent_id, created_at)',
 ];
 
 export class ConflictError extends Error {
@@ -129,6 +143,74 @@ function adapter({ sql, tx, kind }) {
     },
     async mcpSession(id) { await migrate(); const r = (await sql('select * from recon_mcp_sessions where id = $1', [id]))[0]; return r && { tenant: r.tenant, agent: r.agent, hunt: r.hunt, at: n(r.at) }; },
     async saveMcpSession(id, s) { await migrate(); await sql('insert into recon_mcp_sessions (id, tenant, agent, hunt, at) values ($1, $2, $3, $4, $5) on conflict (id) do update set agent = $3, hunt = $4, at = $5', [id, s.tenant, s.agent, s.hunt || null, Date.now()]); },
+    // webhooks
+    async getWebhook(tenant, agentId) {
+      await migrate();
+      const r = (await sql('select * from recon_webhooks where tenant = $1 and agent_id = $2', [tenant, agentId]))[0];
+      return r ? webhookRow(r) : null;
+    },
+    async listWebhooks(tenant) {
+      await migrate();
+      return (await sql('select * from recon_webhooks where tenant = $1', [tenant])).map(webhookRow);
+    },
+    async saveWebhook(w) {
+      await migrate();
+      await sql(
+        `insert into recon_webhooks (tenant, agent_id, url, host, events, auth, secret, prev_secret, prev_secret_until, status, last_status, last_delivery_at, fail_count, created_at, updated_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         on conflict (tenant, agent_id) do update set
+           url=$3, host=$4, events=$5, auth=$6, secret=$7, prev_secret=$8, prev_secret_until=$9,
+           status=$10, last_status=$11, last_delivery_at=$12, fail_count=$13, updated_at=$15`,
+        [w.tenant, w.agentId, w.url, w.host, JSON.stringify(w.events || []), w.auth || 'hmac', w.secret, w.prevSecret || null, w.prevSecretUntil || 0, w.status || 'active', w.lastStatus || null, w.lastDeliveryAt || null, w.failCount || 0, w.createdAt, w.updatedAt],
+      );
+      return w;
+    },
+    async deleteWebhook(tenant, agentId) {
+      await migrate();
+      await sql('delete from recon_webhooks where tenant = $1 and agent_id = $2', [tenant, agentId]);
+    },
+    async saveDelivery(d) {
+      await migrate();
+      await sql(
+        `insert into recon_webhook_deliveries (id, event_id, tenant, agent_id, type, steer_ids, payload, attempt, status, http_status, error, next_attempt_at, created_at, delivered_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         on conflict (id) do update set attempt=$8, status=$9, http_status=$10, error=$11, next_attempt_at=$12, delivered_at=$14`,
+        [d.id, d.eventId, d.tenant, d.agentId, d.type, JSON.stringify(d.steerIds || []), d.payload, d.attempt, d.status, d.httpStatus ?? null, d.error ?? null, d.nextAttemptAt ?? null, d.createdAt, d.deliveredAt ?? null],
+      );
+      return d;
+    },
+    async listDeliveries(tenant, agentId, limit = 20) {
+      await migrate();
+      const rows = agentId
+        ? await sql('select * from recon_webhook_deliveries where tenant = $1 and agent_id = $2 order by created_at desc limit $3', [tenant, agentId, limit])
+        : await sql('select * from recon_webhook_deliveries where tenant = $1 order by created_at desc limit $2', [tenant, limit]);
+      return rows.map(deliveryRow);
+    },
+    async dueDeliveries(nowMs, limit = 50) {
+      await migrate();
+      const rows = await sql("select * from recon_webhook_deliveries where status = 'retrying' and next_attempt_at is not null and next_attempt_at <= $1 order by next_attempt_at asc limit $2", [nowMs, limit]);
+      return rows.map(deliveryRow);
+    },
+  };
+}
+
+function webhookRow(r) {
+  return {
+    tenant: r.tenant, agentId: r.agent_id, url: r.url, host: r.host,
+    events: r.events ? JSON.parse(r.events) : [], auth: r.auth, secret: r.secret,
+    prevSecret: r.prev_secret || null, prevSecretUntil: n(r.prev_secret_until) || 0,
+    status: r.status, lastStatus: r.last_status || null, lastDeliveryAt: n(r.last_delivery_at),
+    failCount: n(r.fail_count) || 0, createdAt: n(r.created_at), updatedAt: n(r.updated_at),
+  };
+}
+
+function deliveryRow(r) {
+  return {
+    id: r.id, eventId: r.event_id, tenant: r.tenant, agentId: r.agent_id,
+    type: r.type, steerIds: r.steer_ids ? JSON.parse(r.steer_ids) : [], payload: r.payload,
+    attempt: n(r.attempt) || 1, status: r.status, httpStatus: n(r.http_status),
+    error: r.error || null, nextAttemptAt: n(r.next_attempt_at),
+    createdAt: n(r.created_at), deliveredAt: n(r.delivered_at),
   };
 }
 
@@ -140,6 +222,8 @@ export function memoryDb() {
   const apiKeys = new Map();
   const files = new Map(); // `${tenant}\n${path}` -> { content, version }
   const sessions = new Map();
+  const webhooks = new Map(); // `${tenant}\n${agentId}` -> webhook
+  const deliveries = [];
   const fk = (t, p) => `${t}\n${p}`;
   return {
     kind: 'memory',
@@ -174,5 +258,21 @@ export function memoryDb() {
     },
     async mcpSession(id) { return sessions.get(id) || null; },
     async saveMcpSession(id, s) { sessions.set(id, { ...s, at: Date.now() }); },
+    async getWebhook(t, a) { const w = webhooks.get(fk(t, a)); return w ? { ...w } : null; },
+    async listWebhooks(t) { return [...webhooks.values()].filter((w) => w.tenant === t).map((w) => ({ ...w })); },
+    async saveWebhook(w) { webhooks.set(fk(w.tenant, w.agentId), { ...w }); return { ...w }; },
+    async deleteWebhook(t, a) { webhooks.delete(fk(t, a)); },
+    async saveDelivery(d) {
+      const idx = deliveries.findIndex((x) => x.id === d.id);
+      if (idx >= 0) deliveries[idx] = { ...d };
+      else deliveries.push({ ...d });
+      return { ...d };
+    },
+    async listDeliveries(t, a, limit = 20) {
+      return deliveries.filter((d) => d.tenant === t && (!a || d.agentId === a)).sort((x, y) => y.createdAt - x.createdAt).slice(0, limit);
+    },
+    async dueDeliveries(nowMs, limit = 50) {
+      return deliveries.filter((d) => d.status === 'retrying' && d.nextAttemptAt && d.nextAttemptAt <= nowMs).sort((x, y) => x.nextAttemptAt - y.nextAttemptAt).slice(0, limit);
+    },
   };
 }

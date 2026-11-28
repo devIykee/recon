@@ -83,16 +83,33 @@ export async function openReport() {
           doc?.written
             ? (doc.fields?.length
               ? h('div.report-prose', ...doc.fields.map((f) => h('div.report-field', h('div.sec-label', f.label), ...paras(f.value))))
-              : h('div.report-prose', ...paras(doc.body)))
+              : h('div.report-prose', ...paras(doc.body), doc.appendix ? h('div.report-field', h('div.sec-label', 'Code / Proof-of-Concept Appendix'), h('pre.code', doc.appendix)) : null))
             : h('div.report-prose.empty-prose',
               h('p', h('b', status)),
               h('p', 'When it is ready, an agent calls recon_write_report. It gets your skill as its instructions and every fact the skill asks for from the board: the confirmation card, evidence, suggested fix, what was checked and held, what was not reviewed, scope and the disclosure channel. It writes the report and submits it; anything that breaks the skill, like markdown or a missing severity up front, is sent back to fix.')),
+          (() => {
+            if (!doc?.written) return null;
+            const target = list('target')[0];
+            const emailMatch = (s) => String(s || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || '';
+            const to = target?.securityContact?.trim() || emailMatch(target?.disclosureChannel);
+            const fullText = doc.appendix ? `${doc.body}\n\n--- APPENDIX ---\n\n${doc.appendix}` : doc.body;
+            const subject = `Security disclosure: ${target?.name || live.state.project.name}`;
+            const mailto = to ? `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(fullText.slice(0, 1800))}` : null;
+            const dState = doc.disclosureState || 'draft';
+            return h('div.row-gap', { style: { marginTop: '10px', alignItems: 'center' } },
+              h('span.verify-note', to ? `Disclosure handoff → ${to}` : 'Disclosure status (recon never sends automatically):'),
+              h('select.input', { style: { width: 'auto' }, on: { change: (e) => set({ disclosure: { key: doc.key, state: e.target.value } }) } },
+                h('option', { value: 'draft', selected: dState === 'draft' }, 'Draft'),
+                h('option', { value: 'sent', selected: dState === 'sent' }, 'Sent'),
+                h('option', { value: 'acknowledged', selected: dState === 'acknowledged' }, 'Acknowledged by project')),
+              mailto ? h('a.btn.btn-sm', { href: mailto }, icon('send'), 'Open in mail client') : null);
+          })(),
           h('div.modal-actions',
             h('span.verify-note', doc?.written ? `Written ${ago(doc.at)} by ${authorName(doc.by)}` : status),
             h('span.spacer'),
             shape && r.included.length ? h(`button.btn${doc?.written && !doc.stale ? '' : '.btn-primary'}`, { on: { click: ask } }, icon('send'), written.length ? 'Ask for a rewrite' : 'Ask an agent to write it') : null,
-            doc?.written ? h('button.btn', { on: { click: () => { navigator.clipboard.writeText(doc.body).then(() => toast('Copied.', 'ok'), () => toast('Could not copy.', 'error')); } } }, icon('copy'), 'Copy') : null,
-            written.length ? h('button.btn.btn-primary', { on: { click: () => download(written.map((d) => ({ name: d.name, body: d.body }))) } }, icon('download'), written.length > 1 ? `Download ${written.length}` : 'Download') : null))),
+            doc?.written ? h('button.btn', { on: { click: () => { const full = doc.appendix ? `${doc.body}\n\n--- APPENDIX ---\n\n${doc.appendix}` : doc.body; navigator.clipboard.writeText(full).then(() => toast('Copied.', 'ok'), () => toast('Could not copy.', 'error')); } } }, icon('copy'), 'Copy') : null,
+            written.length ? h('button.btn.btn-primary', { on: { click: () => download(written.map((d) => ({ name: d.name, body: d.appendix ? `${d.body}\n\n--- APPENDIX ---\n\n${d.appendix}` : d.body }))) } }, icon('download'), written.length > 1 ? `Download ${written.length}` : 'Download') : null))),
     );
   }
 

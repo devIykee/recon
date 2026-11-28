@@ -18,13 +18,14 @@ import { DemoAgent } from './demo.js';
 import { Engagements } from './engagements.js';
 import { mustDo, pulse, whereWeLeftOff } from './proactive.js';
 import { cardGaps, severityProblem, evidenceGaps, duplicateOf, reportedMatch, openSteersFor } from './quality.js';
-import { buildReport, reportBrief, checkSubmission } from './report.js';
+import { buildReport, reportBrief, checkSubmission, buildHandoff } from './report.js';
 import { Skills, SkillError } from './skills.js';
 import { ruleExposure, suggestRules, ENGINE_HINTS } from './rules.js';
 import { playbookFor } from './knowledge.js';
 import { watchSource } from './dropin.js';
 import { loadConfig, ROOT } from './config.js';
 import { createClient } from './client.js';
+import { createWebhookManager, fileWebhookStore } from './webhooks.js';
 
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 
@@ -152,6 +153,76 @@ export function createHub(overrides = {}) {
     prune: () => { for (const [id, sess] of sessionMap) if (Date.now() - sess.at > 24 * 3600_000) sessionMap.delete(id); },
   };
 
+  // Outbound webhooks: local hubs persist to dataDir/webhooks.json; hosted passes db.
+  const suppressWebhookSteers = new Set();
+  const webhooks = createWebhookManager({
+    store: overrides.webhookStore || fileWebhookStore(path.join(cfg.dataDir, 'webhooks.json')),
+    fetch: overrides.webhookFetch || globalThis.fetch,
+    hosted: cfg.hosted,
+    allowLocal: Boolean(overrides.webhookAllowLocal),
+    debounceMs: overrides.webhookDebounceMs ?? (cfg.hosted ? 0 : 3000),
+    attemptTimeoutMs: overrides.webhookTimeoutMs ?? 3000,
+    waitUntil: overrides.waitUntil || null,
+    onStatus: (tenantId, agentId, summary) => {
+      const t = tenants.get(tenantId);
+      const a = t?.store?.get('agent', agentId);
+      if (a) {
+        a.wake = summary || {};
+        a.updatedAt = t.store.tick();
+        t.store.emitChange('upsert', 'agent', a, null);
+        t.store.save();
+      }
+    },
+  });
+
+  function boardUrl(req) {
+    if (req?.headers?.host) {
+      const proto = req.headers['x-forwarded-proto'] || (cfg.hosted ? 'https' : 'http');
+      return `${proto}://${req.headers.host}/`;
+    }
+    return `http://${cfg.host === '0.0.0.0' ? 'localhost' : cfg.host}:${cfg.port}/`;
+  }
+
+  function isAgentListening(agent) {
+    if (!agent?.waitingSince) return false;
+    const lastSeen = agent.lastSeen || agent.updatedAt || 0;
+    return Date.now() - lastSeen < 60_000;
+  }
+
+  function dispatchSteerWebhook(t, store, steer, type) {
+    if (!steer || suppressWebhookSteers.has(steer.id)) return;
+    if (steer.state !== 'open') return;
+    const state = store.state;
+    const to = steer.to || ['all'];
+    const targets = to.includes('all')
+      ? Object.values(state.items.agent)
+      : to.map((id) => state.items.agent[id] || { id, name: id.replace(/^ag_/, '') });
+    const item = steer.itemId ? Object.values(state.items).map((m) => m[steer.itemId]).find(Boolean) : null;
+    for (const a of targets) {
+      if (!a?.id) continue;
+      const pending = openSteersFor(state, a.id).length;
+      webhooks.notify(t.id, a.id, {
+        type,
+        hunt: { id: state.project.id, name: state.project.name },
+        agent: { id: a.id, name: a.name || a.id },
+        data: {
+          steer: {
+            id: steer.id,
+            action: steer.action,
+            note: steer.note,
+            to: steer.to,
+            item: item ? { id: item.id, kind: item.kind, title: label(item.kind, item) } : null,
+            createdAt: steer.createdAt,
+          },
+          pending,
+        },
+        reply: { mcp_tool: 'recon_steer', state_after_ack: 'acknowledged', board: boardUrl() },
+        steerIds: [steer.id],
+        isListening: isAgentListening(a),
+      }).catch(() => {});
+    }
+  }
+
   function tenant(id = 'default') {
     let t = tenants.get(id);
     if (!t) {
@@ -173,11 +244,19 @@ export function createHub(overrides = {}) {
     t.store.on('change', ({ op, kind, item, activity }) => {
       send({ t: 'change', op, kind, item, activity });
       pushSuggestions();
+      if (kind === 'steer' && item) {
+        if (activity?.action === 'steered') dispatchSteerWebhook(t, t.store, item, 'steer.created');
+        else if (op === 'upsert' && item.state === 'open' && activity?.fields?.includes('state')) dispatchSteerWebhook(t, t.store, item, 'steer.reopened');
+      }
     });
     t.store.on('reset', () => send({ t: 'reset', state: statePayload(t) }));
     // an agent working in a hunt that is not on screen: tell the board so the human can switch
     let lastHuntPing = 0;
     t.engagements.onSide = (id, s, evt) => {
+      if (evt.kind === 'steer' && evt.item) {
+        if (evt.activity?.action === 'steered') dispatchSteerWebhook(t, s, evt.item, 'steer.created');
+        else if (evt.op === 'upsert' && evt.item.state === 'open' && evt.activity?.fields?.includes('state')) dispatchSteerWebhook(t, s, evt.item, 'steer.reopened');
+      }
       if (!evt.activity || Date.now() - lastHuntPing < 4000) return;
       lastHuntPing = Date.now();
       send({ t: 'hunt-activity', hunt: { id, name: s.state.project.name }, activity: evt.activity, agent: s.state.items.agent[evt.activity.by]?.name || evt.activity.by });
@@ -249,7 +328,11 @@ export function createHub(overrides = {}) {
     ok: true, name: 'recon', version: VERSION, mode: cfg.mode, auth: Boolean(cfg.key || cfg.mode === 'multi'), tenant: auth?.tenant, realtime: cfg.realtime, hosted: cfg.hosted,
   }));
 
-  route('GET', '/api/state', ({ t }) => statePayload(t));
+  route('GET', '/api/state', async ({ t }) => {
+    const payload = statePayload(t);
+    const steerDeliveries = await webhooks.steerStatuses(t.id).catch(() => ({}));
+    return { ...payload, steerDeliveries };
+  });
   route('GET', '/api/model', () => describeModel());
   route('GET', '/api/connect', ({ req }) => connectInfo(req));
 
@@ -269,8 +352,25 @@ export function createHub(overrides = {}) {
     return { item, history, ...extra };
   });
 
+  function findDuplicateSteer(store, { action, itemId, to, note }) {
+    const normTo = [...new Set(asArray(to).length ? asArray(to) : ['all'])].sort().join(',');
+    const active = new Set(['open', 'queued', 'acknowledged']);
+    return Object.values(store.state.items.steer).find((s) => {
+      if (!active.has(s.state)) return false;
+      if ((s.action || 'note') !== (action || 'note')) return false;
+      const sTo = [...new Set(s.to || ['all'])].sort().join(',');
+      if (sTo !== normTo) return false;
+      if (itemId) return s.itemId === itemId;
+      return !s.itemId && note && String(s.note || '').trim() === String(note).trim();
+    }) || null;
+  }
+
   route('POST', '/api/items/:kind', ({ t, params, body, who }) => {
     kindOr404(params.kind);
+    if (params.kind === 'steer' && body?.dedup !== false) {
+      const dup = findDuplicateSteer(t.store, body || {});
+      if (dup) return dup;
+    }
     return t.store.upsert(params.kind, body || {}, who);
   });
 
@@ -300,14 +400,28 @@ export function createHub(overrides = {}) {
   });
 
   route('POST', '/api/steers/:id/:verb', ({ t, params, body, who }) => {
-    const state = { ack: 'acknowledged', acknowledge: 'acknowledged', address: 'addressed', reopen: 'open' }[params.verb];
-    if (!state) throw new HttpError(404, 'use ack, address or reopen');
+    const state = {
+      ack: 'acknowledged', acknowledge: 'acknowledged',
+      queue: 'queued',
+      'wait-human': 'waiting-on-human', waiting: 'waiting-on-human',
+      address: 'addressed', reopen: 'open',
+    }[params.verb];
+    if (!state) throw new HttpError(404, 'use ack, queue, wait-human, address or reopen');
+    if (!t.store.get('steer', params.id)) {
+      const elsewhere = (t.engagements?.loaded?.() || []).find((e) => e.store !== t.store && Boolean(e.store?.get?.('steer', params.id)));
+      if (elsewhere) {
+        const otherName = elsewhere.store?.state?.project?.name || elsewhere.name || elsewhere.id;
+        throw new HttpError(404, `steer "${params.id}" not found in hunt "${t.store.state.project.name}" - it exists in hunt "${otherName}". Switch hunts with recon_start_engagement("${otherName}") or pass x-recon-hunt.`);
+      }
+      throw new HttpError(404, `steer "${params.id}" not found in hunt "${t.store.state.project.name}"`);
+    }
     const patch = { state };
     if (body?.response) patch.response = String(body.response);
+    if (state === 'waiting-on-human') patch.waitingReason = String(body?.waitingReason || body?.reason || body?.response || '').slice(0, 1000);
     return t.store.patch('steer', params.id, patch, who);
   });
 
-  route('POST', '/api/proposals/:id/:verb', ({ t, params, body, who }) => {
+  route('POST', '/api/proposals/:id/:verb', async ({ t, params, body, who, req }) => {
     const state = { accept: 'accepted', decline: 'declined' }[params.verb];
     if (!state) throw new HttpError(404, 'use accept or decline');
     if (who !== 'human') throw new HttpError(403, 'only a human accepts or declines proposals');
@@ -315,12 +429,42 @@ export function createHub(overrides = {}) {
     const choice = typeof body?.choice === 'string' ? body.choice.slice(0, 500) : '';
     if (choice && cur?.options?.length && !cur.options.includes(choice)) throw new HttpError(400, `choice must be one of: ${cur.options.join(' | ')}`);
     const p = t.store.patch('proposal', params.id, { state, ...(choice ? { choice } : {}) }, who);
-    if (state === 'accepted' && body?.steer !== false) {
-      // Accepting a proposal tells the proposer to go ahead, through the same steer channel.
-      t.store.create('steer', {
-        action: p.steerKind || 'note', itemId: p.itemId || '', itemKind: p.itemKind || '',
-        to: [p.createdBy], note: choice ? `Decision: ${choice} (re: ${p.text})` : `Go ahead: ${p.text}`, state: 'acknowledged',
-      }, who);
+    if (state === 'accepted') {
+      // Apply declarative report settings bound to this proposal, or infer combined/separate from choice.
+      const reportPatch = {};
+      if (p.onAccept?.report && typeof p.onAccept.report === 'object') {
+        for (const k of ['shape', 'path', 'includeIds', 'skill', 'signOff', 'signOffAliases']) {
+          if (p.onAccept.report[k] !== undefined) reportPatch[k] = p.onAccept.report[k];
+        }
+      }
+      if (!reportPatch.shape && choice && /^(combined|separate)\b/i.test(choice.trim()) && /report/i.test(`${p.text} ${(p.options || []).join(' ')}`)) {
+        reportPatch.shape = /^combined\b/i.test(choice.trim()) ? 'combined' : 'separate';
+      }
+      if (Object.keys(reportPatch).length) {
+        t.store.setProject({ report: reportPatch }, who);
+        t.store.log({ by: who, action: 'updated', kind: 'project', summary: `applied report settings from proposal (${Object.entries(reportPatch).map(([k, v]) => `${k}=${v}`).join(', ')})` });
+      }
+      if (body?.steer !== false) {
+        // Accepting a proposal tells the proposer to go ahead, through the same steer channel.
+        // Suppress duplicate steer.created webhook since proposal.decided fires below.
+        const st = t.store.create('steer', {
+          action: p.steerKind || 'note', itemId: p.itemId || '', itemKind: p.itemKind || '',
+          to: [p.createdBy], note: choice ? `Decision: ${choice} (re: ${p.text})` : `Go ahead: ${p.text}`, state: 'acknowledged',
+        }, who);
+        suppressWebhookSteers.add(st.id);
+        setTimeout(() => suppressWebhookSteers.delete(st.id), 10_000).unref?.();
+      }
+    }
+    if (p.createdBy && p.createdBy !== 'human') {
+      const a = t.store.state.items.agent[p.createdBy] || { id: p.createdBy, name: p.createdBy.replace(/^ag_/, '') };
+      await webhooks.notify(t.id, a.id, {
+        type: 'proposal.decided',
+        hunt: { id: t.store.state.project.id, name: t.store.state.project.name },
+        agent: { id: a.id, name: a.name || a.id },
+        data: { proposal: { id: p.id, text: p.text, state, choice: p.choice || null }, pending: openSteersFor(t.store.state, a.id).length },
+        reply: { mcp_tool: 'recon_briefing', board: boardUrl(req) },
+        isListening: isAgentListening(a),
+      }).catch(() => {});
     }
     return p;
   });
@@ -357,6 +501,8 @@ export function createHub(overrides = {}) {
     const item = t.store.find(s.itemId);
     const owner = item?.owner || (item?.createdBy && item.createdBy !== 'human' ? item.createdBy : null);
     const to = asArray(body?.to).length ? asArray(body.to) : owner ? [owner] : ['all'];
+    const dup = findDuplicateSteer(t.store, { action: s.action, itemId: s.itemId, to });
+    if (dup) return dup;
     return t.store.create('steer', {
       action: s.action, itemId: s.itemId, itemKind: s.itemKind, to,
       note: body?.note || `${s.title}. ${s.why}`,
@@ -391,10 +537,25 @@ export function createHub(overrides = {}) {
     const cur = t.store.state.project.report || {};
     const patch = {};
     if (who === 'human') {
-      for (const k of ['shape', 'path', 'includeIds', 'skill', 'signOff']) if (body?.[k] !== undefined) patch[k] = body[k];
+      for (const k of ['shape', 'path', 'includeIds', 'skill', 'signOff', 'signOffAliases']) if (body?.[k] !== undefined) patch[k] = body[k];
       if (patch.skill && !t.skills.get(patch.skill)) throw new HttpError(400, `no skill "${patch.skill}"`);
+      if (body?.disclosure && typeof body.disclosure === 'object') {
+        const { key, state: dState } = body.disclosure;
+        if (!['draft', 'sent', 'acknowledged'].includes(dState)) throw new HttpError(400, 'disclosure state must be draft, sent or acknowledged');
+        const docs = (cur.documents || []).map((d) => {
+          if (d.key !== key) return d;
+          const now = Date.now();
+          return {
+            ...d,
+            disclosureState: dState,
+            sentAt: dState === 'sent' || dState === 'acknowledged' ? (d.sentAt || now) : null,
+            acknowledgedAt: dState === 'acknowledged' ? (d.acknowledgedAt || now) : null,
+          };
+        });
+        patch.documents = docs;
+      }
     } else {
-      if (['shape', 'includeIds', 'skill', 'signOff'].some((k) => body?.[k] !== undefined)) throw new HttpError(403, 'the report shape, which findings go in, the writing skill and whose name signs it are the human\'s call: ask with recon_propose and options');
+      if (['shape', 'includeIds', 'skill', 'signOff', 'signOffAliases', 'disclosure'].some((k) => body?.[k] !== undefined)) throw new HttpError(403, 'the report shape, which findings go in, the writing skill, disclosure state and whose name signs it are the human\'s call: ask with recon_propose and options');
       if (body?.path !== undefined && cur.path) throw new HttpError(403, `the report already has a path (${cur.path}); ask the human to change it`);
       if (body?.path !== undefined) patch.path = body.path;
     }
@@ -436,7 +597,39 @@ export function createHub(overrides = {}) {
     t.store.setProject({ report: { documents: [...keep, ...stored], last: { at, by: who, shape: docs[0].shape, files: stored.map((d) => d.name), included: stored.flatMap((d) => d.findingIds) } } }, who);
     t.store.log({ by: who, action: 'note', kind: 'project', summary: `wrote ${stored.map((d) => d.name).join(', ')} following "${skill.name}"` });
     const r = buildReport(t.store.state);
-    return { ...r, written: stored.map((d) => d.name) };
+    const handoff = buildHandoff(t.store.state, stored);
+    return { ...r, written: stored.map((d) => d.name), handoff };
+  });
+
+  // ---------- outbound agent webhooks (human-only registration) ----------
+
+  const whErr = async (fn) => { try { return await fn(); } catch (err) { throw new HttpError(err.status || 400, err.message); } };
+  route('PUT', '/api/agents/:id/webhook', ({ t, params, body, who }) => {
+    humanOnly(who, 'configuring an agent webhook');
+    return whErr(() => webhooks.register(t.id, params.id, body || {}));
+  });
+  route('POST', '/api/agents/:id/webhook/rotate', ({ t, params, body, who }) => {
+    humanOnly(who, 'rotating a webhook secret');
+    return whErr(() => webhooks.rotate(t.id, params.id, body || {}));
+  });
+  route('GET', '/api/agents/:id/webhook', async ({ t, params }) => {
+    const info = await webhooks.get(t.id, params.id);
+    if (!info) throw new HttpError(404, `no webhook configured for "${params.id}"`);
+    return info;
+  });
+  route('POST', '/api/agents/:id/webhook/test', ({ t, params, who, req }) => {
+    humanOnly(who, 'testing an agent webhook');
+    const a = t.store.state.items.agent[params.id] || { id: params.id, name: params.id.replace(/^ag_/, '') };
+    return whErr(() => webhooks.sendTest(t.id, params.id, {
+      hunt: { id: t.store.state.project.id, name: t.store.state.project.name },
+      agent: { id: a.id, name: a.name || a.id },
+      board: boardUrl(req),
+    }));
+  });
+  route('GET', '/api/agents/:id/webhook/deliveries', ({ t, params, query }) => webhooks.deliveries(t.id, params.id, query.get('limit')));
+  route('DELETE', '/api/agents/:id/webhook', ({ t, params, who }) => {
+    humanOnly(who, 'removing an agent webhook');
+    return whErr(() => webhooks.remove(t.id, params.id));
   });
 
   // ---------- skills: kept per machine, shared by every hunt ----------
@@ -716,10 +909,23 @@ export function createHub(overrides = {}) {
   }
 
   function connectInfo(req) {
-    const base = `http://${req.headers.host || `${cfg.host}:${cfg.port}`}`;
+    const proto = req.headers['x-forwarded-proto'] || (cfg.hosted ? 'https' : 'http');
+    const base = `${proto}://${req.headers.host || `${cfg.host}:${cfg.port}`}`;
     const bin = path.join(ROOT, 'bin', 'recon.js');
+    const mcpUrl = `${base}/mcp`;
+    const mcpConfig = {
+      mcpServers: {
+        recon: {
+          url: mcpUrl,
+          headers: {
+            Authorization: 'Bearer <your-api-key>',
+            'x-recon-agent': '<agent-name>',
+          },
+        },
+      },
+    };
     return {
-      base, mode: cfg.mode, bin, needsKey: Boolean(cfg.key || cfg.mode === 'multi'),
+      base, mcpUrl, mcpConfig, hosted: cfg.hosted, mode: cfg.mode, bin, needsKey: Boolean(cfg.key || cfg.mode === 'multi'),
       watching: [...tenants.values()].flatMap((t) => t.watchers.map((w) => w.source)),
       dropinExample: path.join(cfg.dataDir, 'inbox.json'),
     };
@@ -916,6 +1122,7 @@ export function createHub(overrides = {}) {
     cfg,
     server,
     ws,
+    webhooks,
     tenant,
     tenants,
     handle,
@@ -956,6 +1163,7 @@ export function createHub(overrides = {}) {
     },
     async close() {
       clearInterval(healthTimer);
+      webhooks.close();
       ws.closeAll();
       for (const t of tenants.values()) t.close();
       await new Promise((r) => server.close(() => r()));

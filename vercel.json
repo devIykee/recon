@@ -5,6 +5,7 @@
   "installCommand": "",
   "outputDirectory": "public",
   "rewrites": [{ "source": "/((?!robots\\.txt$).*)", "destination": "/api/index" }],
+  "crons": [{ "path": "/api/internal/webhooks/retry", "schedule": "0 0 * * *" }],
   "functions": {
     "api/index.js": { "maxDuration": 60, "includeFiles": "{web,docs/img,src,package.json}/**" }
   }

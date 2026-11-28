@@ -90,28 +90,49 @@ function writeShim(home, bin) {
   return p;
 }
 
-async function healthy(url, key) {
+export async function probeHub(url, key, { timeoutMs = 2500, fetch: fetchImpl = globalThis.fetch } = {}) {
+  const clean = String(url || '').replace(/\/$/, '');
   try {
-    const res = await fetch(`${url}/api/health`, { headers: key ? { authorization: `Bearer ${key}` } : {}, signal: AbortSignal.timeout(1500) });
-    if (!res.ok) return null;
-    const body = await res.json();
-    return body?.name === 'recon' ? body : null;
-  } catch {
-    return null;
+    const res = await fetchImpl(`${clean}/api/health`, {
+      headers: key ? { authorization: `Bearer ${key}` } : {},
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const text = await res.text();
+    const isNgrokOffline = /ERR_NGROK_/i.test(text) || (/ngrok/i.test(clean) && !res.ok && /<!doctype html|<html/i.test(text));
+    if (isNgrokOffline) return { ok: false, url: clean, status: res.status, isNgrokOffline: true, reason: `ngrok tunnel offline (${text.match(/ERR_NGROK_\d+/)?.[0] || res.status})` };
+    let body = null;
+    try { body = JSON.parse(text); } catch { /* non-json */ }
+    if (!res.ok) return { ok: false, url: clean, status: res.status, reason: body?.error || `HTTP ${res.status} ${res.statusText}` };
+    if (body?.name !== 'recon') return { ok: false, url: clean, status: res.status, reason: 'endpoint answered but is not a recon hub' };
+    return { ok: true, url: clean, status: res.status, hosted: Boolean(body.hosted), signedIn: body.signedIn, body };
+  } catch (err) {
+    return { ok: false, url: clean, status: 0, reason: err?.name === 'TimeoutError' ? 'timed out' : (err?.cause?.code || err?.message || 'unreachable') };
   }
+}
+
+async function healthy(url, key) {
+  const p = await probeHub(url, key, { timeoutMs: 1500 });
+  return p.ok ? p.body : null;
 }
 
 export function isLocalUrl(url) {
   return /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/.test(url);
 }
 
-// Make sure a hub is answering at `url`. For the default local address, start one
-// in the background if needed. Returns { url, started }.
+// Make sure a hub is answering at `url` (supports comma-separated fallback URLs).
+// For a local address, start one in the background if needed. Returns { url, started }.
 export async function ensureHub({ url = `http://127.0.0.1:${DEFAULT_PORT}`, key, bin, home = reconHome(), log = () => {} } = {}) {
-  url = url.replace(/\/$/, '');
-  if (await healthy(url, key)) return { url, started: false };
-  if (!isLocalUrl(url)) throw new Error(`no recon hub answering at ${url}`);
-  const port = Number(new URL(url).port || DEFAULT_PORT);
+  const candidates = String(url || '').split(',').map((u) => u.trim().replace(/\/$/, '')).filter(Boolean);
+  const failures = [];
+  for (const c of candidates) {
+    const p = await probeHub(c, key, { timeoutMs: 2000 });
+    if (p.ok) return { url: c, started: false, info: p.body };
+    failures.push(`${c}: ${p.reason}`);
+  }
+  const local = candidates.find(isLocalUrl);
+  if (!local) throw new Error(`no recon hub answering (${failures.join('; ')})`);
+  const target = local;
+  const port = Number(new URL(target).port || DEFAULT_PORT);
   fs.mkdirSync(home, { recursive: true });
   const logFile = path.join(home, 'hub.log');
   const fd = fs.openSync(logFile, 'a');
@@ -125,7 +146,7 @@ export async function ensureHub({ url = `http://127.0.0.1:${DEFAULT_PORT}`, key,
   fs.closeSync(fd);
   for (let i = 0; i < 60; i++) {
     await new Promise((r) => setTimeout(r, 150));
-    if (await healthy(url, key)) { log(`recon: started the hub at ${url} (log: ${logFile})`); return { url, started: true, pid: child.pid }; }
+    if (await healthy(target, key)) { log(`recon: started the hub at ${target} (log: ${logFile})`); return { url: target, started: true, pid: child.pid }; }
   }
   throw new Error(`the hub did not start; see ${logFile}`);
 }

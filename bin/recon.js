@@ -3,7 +3,56 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { createClient, defaultUrl, ReconError } from '../src/client.js';
+import { createClient, defaultUrl, parseUrls, ReconError } from '../src/client.js';
+import { ENUMS } from '../src/model.js';
+
+const COMMAND_HELP = {
+  add: `recon add <kind> <text> [flags]
+  Kinds: target | component | actor | external | assumption | hypothesis | finding | chain | rule | lead
+  Evidence kinds: ${ENUMS.evidenceKind.join(', ')}
+  Evidence syntax: --evidence "kind:ref|note" (or --evidence "ref|note" --evidence-kind fork)
+
+  Examples:
+    recon add target "Acme" --type vault --chain mainnet --repo https://github.com/acme/contracts --commit abc123 --contact security@acme.xyz
+    recon add finding "Rounding drain" --severity high --attacker stranger --reachability permissionless \\
+      --bound "bounded by pool balance" --funds "0xabc 1.2M USDC" --funds-method fork --reported no \\
+      --verified fork --test test_Drain --test-result pass \\
+      --evidence "code:src/Vault.sol:120|missing rounding up" --evidence "fork:test_Drain|drains 1.2M on mainnet fork"`,
+  evidence: `recon evidence <id|name> "kind:ref|note" [--kind <kind>] [--command "<cmd>"] [--env VAR1,VAR2]
+recon evidence rm <id|name> <evidenceId>
+
+  Kinds: ${ENUMS.evidenceKind.join(', ')}
+
+  Examples:
+    recon evidence fd_abc "fork:test_Drain|mainnet fork at block 21000000" --command "forge test --match-test test_Drain --fork-url $ETH_RPC_URL" --env ETH_RPC_URL,FORK_BLOCK
+    recon evidence rm fd_abc ev_1234`,
+  ack: `recon ack <steerId>
+  Acknowledge a steer you are actively working on now (starts the progress clock).
+  For multiple steers at once, use \`recon queue <steerId>\` for the rest so they do not lock out writes.`,
+  queue: `recon queue <steerId>
+  Acknowledge a steer into your queue without starting the active lockout clock.`,
+  'wait-human': `recon wait-human <steerId> "<what the human needs to do>"
+  Park a steer that is waiting on human action (e.g., sending a disclosure email) so it stops counting as overdue.`,
+  address: `recon address <steerId> "<what you did or found>"
+  Mark a steer addressed with a plain-words summary.`,
+  set: `recon set <id|name> field=value [field=value ...]
+  Alias: recon update <id|name> field=value ...
+  Example: recon set fd_abc fix="Round shares up in withdraw()" alreadyReported=no`,
+  update: `recon update <id|name> field=value ...   (updates an item, same as \`recon set\`)
+recon upgrade [--check] [--from DIR]     (installs the latest recon from GitHub)`,
+  upgrade: `recon upgrade [--check] [--from DIR]
+  Install the latest recon from GitHub and restart local MCP servers.`,
+  doctor: `recon doctor [--url URL] [--key KEY]
+  Check connectivity to each configured URL, verify /api/health and API key, and test an MCP initialize call.`,
+  report: `recon report [brief | submit <file> [--finding id,id] | show] [--shape combined|separate] [--sign-off "Name"]
+  Examples:
+    recon report brief
+    recon report submit disclosure.txt`,
+  wait: `recon wait [--timeout 100]
+  Long-poll the hub until a steer or proposal decision arrives.`,
+  propose: `recon propose "<question>" --option "<choice A>" --option "<choice B>" [--item <id>]
+  Offer the human one-click choices on the board.`,
+};
 
 const HELP = `recon - a shared cockpit where you and your agents hunt vulnerabilities together
 
@@ -168,11 +217,24 @@ function line(it) {
   return `${dim(it.id.padEnd(22))} ${state ? `${tint(state).padEnd(tty ? 21 : 12)} ` : ''}${title}${extra ? `  ${extra}` : ''}`;
 }
 
+function parseEvidenceSpec(raw, defaultKind) {
+  const [left, ...note] = String(raw).split('|');
+  let ref = left.trim();
+  let kind = defaultKind && ENUMS.evidenceKind.includes(defaultKind) ? defaultKind : undefined;
+  const colon = ref.indexOf(':');
+  if (colon > 0 && !ref.startsWith('http://') && !ref.startsWith('https://')) {
+    const prefix = ref.slice(0, colon).trim().toLowerCase();
+    if (ENUMS.evidenceKind.includes(prefix)) {
+      kind = prefix;
+      ref = ref.slice(colon + 1).trim();
+    }
+  }
+  return { ...(kind ? { kind } : {}), ref, note: note.join('|').trim() };
+}
+
 function evidenceArgs(v) {
-  return many(v).map((e) => {
-    const [ref, ...note] = String(e).split('|');
-    return { ref: ref.trim(), note: note.join('|').trim() };
-  });
+  const defKind = typeof flags['evidence-kind'] === 'string' ? flags['evidence-kind'] : (typeof flags.kind === 'string' ? flags.kind : undefined);
+  return many(v).map((e) => parseEvidenceSpec(e, defKind));
 }
 
 function parseValue(v) {
@@ -338,7 +400,11 @@ async function add() {
   let fields;
   switch (kind) {
     case 'target': {
-      fields = { name: need(text, 'name'), protocolType: flags.type || 'other', chain: flags.chain, description: flags.description, scope: flags.scope };
+      fields = {
+        name: need(text, 'name'), protocolType: flags.type || 'other', chain: flags.chain,
+        description: flags.description, scope: flags.scope,
+        repoUrl: flags.repo || flags.repoUrl, commit: flags.commit, securityContact: flags.contact || flags.securityContact,
+      };
       const t = await api.create('target', clean(fields));
       const comps = many(flags.components).flatMap((s) => String(s).split(/[,;\n](?![^(]*\))/)).map((s) => s.trim()).filter(Boolean);
       for (const name of comps) await api.create('component', { targetId: t.id, name, type: /\(.*\)/.test(name) ? 'function' : 'contract' });
@@ -473,9 +539,24 @@ async function set() {
 
 async function evidence() {
   const api = client();
+  if (pos[0] === 'rm' || pos[0] === 'remove') {
+    const { kind, item } = await api.resolve(need(pos[1], 'id or name'));
+    const eid = need(pos[2], 'evidence id (ev_...)');
+    const it = await api.removeEvidence(kind, item.id, eid);
+    out(it, () => `removed evidence ${dim(eid)} from ${dim(it.id)} (${it.evidence.length} remaining)`);
+    return;
+  }
   const { kind, item } = await api.resolve(need(pos[0], 'id or name'));
-  const it = await api.evidence(kind, item.id, { ref: need(pos[1], 'reference'), note: pos.slice(2).join(' ') });
-  out(it, () => `attached evidence to ${dim(it.id)} (${it.evidence.length} total)`);
+  const raw = need(pos[1], 'reference (or "kind:ref|note")');
+  const parsed = parseEvidenceSpec(raw, typeof flags.kind === 'string' ? flags.kind : (typeof flags['evidence-kind'] === 'string' ? flags['evidence-kind'] : undefined));
+  if (pos.length > 2) parsed.note = [parsed.note, pos.slice(2).join(' ')].filter(Boolean).join(' ');
+  if (typeof flags.command === 'string') parsed.command = flags.command;
+  if (typeof flags.env === 'string') parsed.env = flags.env.split(',').map((s) => s.trim()).filter(Boolean);
+  if (typeof flags.rpc === 'string') parsed.rpc = flags.rpc;
+  if (typeof flags.block === 'string') parsed.block = flags.block;
+  if (typeof flags.result === 'string') parsed.result = flags.result;
+  const it = await api.evidence(kind, item.id, parsed);
+  out(it, () => `attached ${parsed.kind || 'evidence'} to ${dim(it.id)} (${it.evidence.length} total)`);
 }
 
 async function check() {
@@ -522,6 +603,7 @@ async function steerVerb(verb) {
   const id = need(pos[0], 'steer id');
   const response = pos.slice(1).join(' ');
   if (verb === 'address' && !response) throw new ReconError(2, 'say what you did: recon address <steerId> "what you found"');
+  if (verb === 'wait-human' && !response) throw new ReconError(2, 'say what you need from the human: recon wait-human <steerId> "reason"');
   const s = await api.steer(id, verb, response || undefined);
   out(s, () => `steer ${dim(s.id)} → ${tint(s.state)}`);
 }
@@ -690,8 +772,54 @@ async function wait() {
     if (r.woke) break;
   }
   out(r, () => (r.woke
-    ? [...r.events.map((e) => (e.type === 'steer' ? `${bold('steer')} ${e.id} ${e.action}${e.item ? ` on ${e.item.title}` : ''}: ${e.note}` : `${bold('decided')} ${e.id} ${e.state}${e.choice ? `: ${e.choice}` : ''} (${e.text})`)), '', dim(r.next)].join('\n')
+    ? [...r.events.map((e) => {
+      const itemLabel = e.item ? (typeof e.item === 'object' ? (e.item.title || e.item.id || '') : String(e.item)) : '';
+      return e.type === 'steer'
+        ? `${bold('steer')} ${e.id} ${e.action}${itemLabel ? ` on ${itemLabel}` : ''}: ${e.note}`
+        : `${bold('decided')} ${e.id} ${e.state}${e.choice ? `: ${e.choice}` : ''} (${e.text})`;
+    }), '', dim(r.next)].join('\n')
     : dim('nothing from the human yet; run recon wait again to keep listening')));
+}
+
+async function doctor() {
+  const { probeHub } = await import('../src/launch.js');
+  const rawUrl = flags.url || defaultUrl();
+  const key = flags.key ?? process.env.RECON_KEY;
+  const urls = parseUrls(rawUrl);
+  const report = { urls: [], ok: false };
+  for (const u of urls) {
+    const entry = { url: u, health: null, mcp: null };
+    entry.health = await probeHub(u, key, { timeoutMs: 4000 });
+    if (entry.health.ok) {
+      try {
+        const headers = { 'content-type': 'application/json', accept: 'application/json' };
+        if (key) headers.authorization = `Bearer ${key}`;
+        if (agentName) headers['x-recon-agent'] = agentName;
+        const res = await fetch(`${u}/mcp`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: agentName || 'recon-doctor', version: '0.1.0' } } }),
+          signal: AbortSignal.timeout(4000),
+        });
+        const text = await res.text();
+        let data = null;
+        try { data = JSON.parse(text); } catch { /* non-json */ }
+        entry.mcp = res.ok && data?.result?.serverInfo
+          ? { ok: true, status: res.status, server: data.result.serverInfo }
+          : { ok: false, status: res.status, reason: data?.error?.message || data?.error || `HTTP ${res.status}` };
+      } catch (err) {
+        entry.mcp = { ok: false, status: 0, reason: err?.cause?.code || err?.message || 'failed' };
+      }
+      if (entry.mcp.ok) report.ok = true;
+    }
+    report.urls.push(entry);
+  }
+  out(report, () => report.urls.flatMap((e) => [
+    `${bold(e.url)}`,
+    `  health  ${e.health.ok ? COLORS.reviewed('ok') : COLORS.flagged('FAIL')}  ${e.health.ok ? `${e.health.hosted ? 'hosted' : 'local'}${e.health.signedIn === false ? ' (not signed in - check RECON_KEY)' : ''}` : e.health.reason}`,
+    e.mcp ? `  mcp     ${e.mcp.ok ? COLORS.reviewed('ok') : COLORS.flagged('FAIL')}  ${e.mcp.ok ? `${e.mcp.server.name} ${e.mcp.server.version}` : e.mcp.reason}` : `  mcp     ${dim('skipped (health failed)')}`,
+  ]).join('\n'));
+  if (!report.ok) process.exitCode = 1;
 }
 
 // Run hosted recon on this machine: accounts with passkeys, a private board per account.
@@ -710,9 +838,16 @@ async function cloudCmd() {
   process.stderr.write(`\n  hosted recon on http://localhost:${port}  (${url ? 'database: DATABASE_URL' : 'in memory: nothing is kept'})\n\n`);
 }
 
-async function update() {
+async function upgrade() {
   const { runUpdate } = await import('../src/update.js');
   await runUpdate({ from: typeof flags.from === 'string' ? flags.from : null, check: Boolean(flags.check), url: flags.url || process.env.RECON_URL || undefined, key: flags.key ?? process.env.RECON_KEY });
+}
+
+async function update() {
+  // Match MCP recon_update when given `<ref> field=value`; otherwise self-update (deprecated alias for `recon upgrade`).
+  if (pos.length >= 2 && pos.slice(1).every((x) => x.includes('='))) return set();
+  if (!flags.check && !flags.from) process.stderr.write(dim('tip: use `recon upgrade` to self-update recon, and `recon set` (or `recon update <id> k=v`) to edit items.\n'));
+  return upgrade();
 }
 
 async function rules() {
@@ -840,20 +975,31 @@ function clean(o) {
 
 const COMMANDS = {
   serve, mcp, status, briefing, list, ls: list, get, show: get, add, coverage, set, evidence, check, focus, claim, propose,
-  steers, ack: () => steerVerb('ack'), address: () => steerVerb('address'), steer,
+  steers, ack: () => steerVerb('ack'), queue: () => steerVerb('queue'), 'wait-human': () => steerVerb('wait-human'), address: () => steerVerb('address'), steer,
   verify: () => verdict('verified'), dispute: () => verdict('disputed'), unverify: () => verdict('unverified'),
   accept: () => decide('accept'), decline: () => decide('decline'),
-  setup, agent: agentCmd, start, scan, relate, phase, ready, report, skills, wait, say, dismiss, update, rules, rule: ruleResult, cloud: cloudCmd, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
+  setup, agent: agentCmd, start, scan, relate, phase, ready, report, skills, wait, say, dismiss, update, upgrade, doctor, rules, rule: ruleResult, cloud: cloudCmd, sessions, engagements: sessions, open: openCmd, new: newCmd, snapshots: snapshotsCmd, snapshot: snapshotCmd, restore: restoreCmd, suggestions, playbook, watch, push, export: exportCmd, pull: exportCmd, import: importCmd, reset, model,
 };
 
 async function main() {
+  if (cmd === 'help' && pos[0]) {
+    const h = COMMAND_HELP[pos[0]];
+    process.stdout.write(h ? `${h}\n` : `no detailed help for "${pos[0]}". Available: ${Object.keys(COMMAND_HELP).join(', ')}\n\n${HELP}`);
+    return;
+  }
+  if (cmd && flags.help && COMMAND_HELP[cmd]) { process.stdout.write(`${COMMAND_HELP[cmd]}\n`); return; }
   if (!cmd || cmd === 'help' || flags.help) { process.stdout.write(HELP); return; }
   if (cmd === 'version' || flags.version) { process.stdout.write('recon 0.1.0\n'); return; }
   const fn = COMMANDS[cmd];
   if (!fn) { process.stderr.write(`unknown command "${cmd}"\n\n${HELP}`); process.exit(2); }
-  await fn();
+  const longRunning = new Set(['serve', 'mcp', 'wait', 'watch', 'cloud', 'agent', 'doctor', 'upgrade']);
+  const slowTimer = !asJson && !longRunning.has(cmd)
+    ? setTimeout(() => process.stderr.write(dim('recon: working...\n')), 3000)
+    : null;
+  slowTimer?.unref?.();
+  try { await fn(); } finally { if (slowTimer) clearTimeout(slowTimer); }
   // Agents get the same nudge on the cli as over mcp: anything urgent prints after the command.
-  if (agentName && !['briefing', 'steers', 'ack', 'serve', 'mcp', 'agent', 'setup', 'watch', 'help'].includes(cmd) && !asJson) {
+  if (agentName && !['briefing', 'steers', 'ack', 'queue', 'serve', 'mcp', 'agent', 'setup', 'watch', 'help', 'doctor'].includes(cmd) && !asJson) {
     try { const p = await client().pulse(); if (p?.pulse) process.stderr.write(`\n${p.pulse}\n`); } catch { /* the board can answer next time */ }
   }
 }

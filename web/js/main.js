@@ -197,7 +197,11 @@ function renderHeader() {
     if (agentIsWriting(a.id, 1500)) el.classList.add('pulse');
     el.style.cursor = 'pointer';
     el.addEventListener('click', () => { setView('map'); setTimeout(() => map.focusAgent(a.id), 30); });
-    el.dataset.tip = `${a.name} · ${healthOf(a.id).status}${a.focus ? ` · ${a.focus}` : ''}`;
+    const hl = healthOf(a.id);
+    const pLabel = hl.presence === 'asleep-webhook' ? 'asleep · wakes on webhook'
+      : hl.presence === 'webhook-failing' ? 'webhook failing'
+        : hl.presence === 'listening' ? 'listening' : hl.status;
+    el.dataset.tip = `${a.name} · ${pLabel}${a.focus ? ` · ${a.focus}` : ''}`;
     return el;
   }), agents.length > 6 ? h('span.avatar', { style: { '--c': 'var(--island-3)', color: 'var(--text)' } }, `+${agents.length - 6}`) : null);
   renderLive();
@@ -209,10 +213,15 @@ function renderLive() {
   el.classList.toggle('on', live.connected);
   el.classList.toggle('off', !live.connected);
   if (!live.connected) { setChildren(text, 'reconnecting…'); return; }
-  const listening = list('agent').filter((a) => a.waitingSince);
-  const writing = list('agent').filter((a) => !a.waitingSince && agentIsWriting(a.id, 5000));
+  const agents = list('agent');
+  const listening = agents.filter((a) => healthOf(a.id).presence === 'listening' || a.waitingSince);
+  const writing = agents.filter((a) => !a.waitingSince && agentIsWriting(a.id, 5000));
+  const wakeable = agents.filter((a) => healthOf(a.id).presence === 'asleep-webhook');
+  const failing = agents.filter((a) => healthOf(a.id).presence === 'webhook-failing');
   if (writing.length) setChildren(text, h('b', writing.map((a) => a.name).join(', ')), writing.length > 1 ? ' are working' : ' is working');
   else if (listening.length) setChildren(text, h('b', listening.map((a) => a.name).join(', ')), listening.length > 1 ? ' are listening' : ' is listening', ' · write in Talk');
+  else if (failing.length) setChildren(text, h('b', failing.map((a) => a.name).join(', ')), ' webhook failing · check Agents');
+  else if (wakeable.length) setChildren(text, h('b', wakeable.map((a) => a.name).join(', ')), ' asleep · wakes on webhook');
   else {
     const last = live.state.activity[live.state.activity.length - 1];
     setChildren(text, 'live', last ? ` · last change ${short(last.at)}` : '');

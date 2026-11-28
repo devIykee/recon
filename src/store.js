@@ -370,7 +370,11 @@ export class Store extends EventEmitter {
     }
     // Steer acknowledgement timestamps.
     if (kind === 'steer' && changed.includes('state')) {
-      if (item.state === 'acknowledged' && !item.ackAt) item.ackAt = Date.now();
+      if (item.state === 'queued' && !item.ackAt) item.ackAt = Date.now();
+      if (item.state === 'acknowledged') {
+        if (!item.ackAt || before.state === 'queued' || before.state === 'waiting-on-human' || before.state === 'open') item.ackAt = Date.now();
+      }
+      if (item.state === 'waiting-on-human') item.waitingAt = Date.now();
       if (item.state === 'addressed') { item.addressedAt = Date.now(); item.addressedBy = author; if (!item.ackAt) item.ackAt = item.addressedAt; }
     }
     void created; void before;

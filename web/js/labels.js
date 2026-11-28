@@ -78,7 +78,9 @@ export const STEER = {
 
 export const STEER_STATE = {
   open: { label: 'Open', hint: 'Waiting for the agent to see it' },
-  acknowledged: { label: 'Seen', hint: 'The agent saw it and will get to it' },
+  acknowledged: { label: 'Working', hint: 'The agent is working on it now' },
+  queued: { label: 'Queued', hint: 'The agent saw it and queued it behind current work' },
+  'waiting-on-human': { label: 'Waiting on you', hint: 'The agent is waiting for your action' },
   addressed: { label: 'Done', hint: 'The agent reported back' },
 };
 
@@ -114,7 +116,7 @@ export const ACTION_LABEL = {
   evidence: 'evidence', imported: 'imported', note: 'note', focus: 'focus',
 };
 
-export const EVIDENCE_ICON = { code: 'code', tx: 'hash', log: 'log', test: 'test', link: 'link', note: 'note' };
+export const EVIDENCE_ICON = { code: 'code', fork: 'zap', tx: 'hash', log: 'log', test: 'test', link: 'link', note: 'note' };
 
 export const PHASES = [
   { id: 'mapping', label: 'Map', hint: 'Every contract, actor and dependency, and how they connect' },

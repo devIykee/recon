@@ -34,6 +34,8 @@ function openHostedConnect() {
     codeBlock(`Run \`RECON_URL=${base} RECON_KEY=${k} npx -y github:devIykee/recon agent --as ${name}\` and follow its instructions to do this security review with me on the recon board.`),
     h('div.code-label', 'Or add it as a remote MCP server (Claude Code)'),
     codeBlock(`claude mcp add --transport http recon ${base}/mcp --header "Authorization: Bearer ${k}" --header "X-Recon-Agent: ${name}"`),
+    h('div.code-label', 'Remote MCP JSON config (Grok Bot, Cursor, Windsurf, custom connectors)'),
+    codeBlock(JSON.stringify({ mcpServers: { recon: { url: `${base}/mcp`, headers: { Authorization: `Bearer ${k}`, 'x-recon-agent': name } } } }, null, 2)),
     h('div.code-label', 'Any MCP client that starts a local command'),
     codeBlock(JSON.stringify({ mcpServers: { recon: { command: 'npx', args: ['-y', 'github:devIykee/recon', 'mcp', '--name', name], env: { RECON_URL: base, RECON_KEY: k } } } }, null, 2)),
   ];

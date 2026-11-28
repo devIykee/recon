@@ -748,9 +748,20 @@ export function suggest(state, { limit = 10 } = {}) {
     });
   }
 
-  // unverified assumptions
+  // unverified assumptions (skip those clearly covered by target.outOfScope)
+  const STOP_WORDS = new Set(['that', 'this', 'with', 'from', 'have', 'only', 'when', 'where', 'which', 'their', 'about', 'should', 'would', 'could', 'other', 'scope', 'issues', 'issue', 'contracts', 'contract']);
+  const outOfScopeTokens = (t) => String(t?.outOfScope || '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !STOP_WORDS.has(w));
+  const matchesOutOfScope = (assumption) => {
+    const t = targets[assumption.targetId] || (assumption.componentId ? targets[items.component[assumption.componentId]?.targetId] : null);
+    const oos = outOfScopeTokens(t);
+    if (!oos.length) return false;
+    const hay = `${assumption.text || ''} ${assumption.scope || ''} ${assumption.rationale || ''}`.toLowerCase();
+    const hits = oos.filter((tok) => hay.includes(tok));
+    return hits.length >= 2 || (hits.length === 1 && hits[0].length >= 6);
+  };
   for (const a of Object.values(items.assumption)) {
     if (a.state !== 'assumed' || a.verification !== 'unverified') continue;
+    if (matchesOutOfScope(a)) continue;
     push({
       id: sid('challenge', a.id), rule: 'unverified-assumption', action: 'challenge', itemId: a.id, itemKind: 'assumption',
       score: (a.origin === 'developer' ? 58 : 46) + PRIORITY_BONUS[a.priority || 'normal'],
@@ -812,9 +823,11 @@ export function suggest(state, { limit = 10 } = {}) {
     });
   }
 
-  // findings without repro
+  // findings without repro (count test/fork/tx evidence, passing tests, verified, alreadyReported, or info as not needing one)
   for (const f of Object.values(items.finding)) {
     if (!['recon', 'testing'].includes(f.stage) || f.repro) continue;
+    if (f.alreadyReported === 'yes' || f.severity === 'info' || f.testResult === 'pass' || f.verification === 'verified') continue;
+    if ((f.evidence || []).some((e) => ['test', 'fork', 'tx'].includes(e.kind))) continue;
     push({
       id: sid('repro', f.id), rule: 'finding-no-repro', action: 'verify', itemId: f.id, itemKind: 'finding',
       score: 44 + (f.severity === 'critical' ? 15 : f.severity === 'high' ? 8 : 0),
@@ -873,7 +886,7 @@ export function briefing(state, agentId) {
   const items = state.items;
   const me = items.agent[agentId] || null;
   const mine = (s) => (s.to || []).includes('all') || (s.to || []).includes(agentId);
-  const steers = Object.values(items.steer).filter((s) => s.state !== 'addressed' && mine(s))
+  const steers = Object.values(items.steer).filter((s) => !['addressed', 'waiting-on-human'].includes(s.state) && mine(s))
     .sort((a, b) => priorityRank(b.priority) - priorityRank(a.priority) || a.createdAt - b.createdAt)
     .map((s) => ({ id: s.id, action: s.action, state: s.state, note: s.note, item: describeRef(items, s.itemId) }));
   const assignment = new Set(me?.assignment || []);

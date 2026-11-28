@@ -44,7 +44,7 @@ ownership rule below comes straight from `src/model.js`, so agents can rely on i
 | `createdAt`, `updatedAt` | ms timestamps |
 | `createdBy`, `lastTouchedBy` | `human` or an agent id |
 | `_f` | per-field clocks: `{ field: { at, by } }` |
-| `evidence` | `[{ id, kind, ref, note, by, at }]`, `kind` one of `code` `tx` `log` `test` `link` `note` (guessed from `ref` if omitted) |
+| `evidence` | `[{ id, kind, ref, note, by, at }]`, `kind` one of `code` `test` `fork` `tx` `log` `link` `note` (guessed from `ref` if omitted) |
 | `reasoning` | free text |
 | `verification` | `unverified` `verified` `disputed`, human only |
 | `priority` | `low` `normal` `high` `urgent`, human only |

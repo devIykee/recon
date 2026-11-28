@@ -16,12 +16,23 @@ const VERIFY = { fork: 'a test on a local fork of the live chain', eth_call: 're
 const FUNDS = { eth_call: 'read-only calls', fork: 'a fork', explorer: 'a block explorer', 'not-measured': 'not measured' };
 
 export function reportConfig(state) {
-  return { shape: '', path: '', includeIds: [], skill: '', signOff: '', documents: [], ...(state.project.report || {}) };
+  return { shape: '', path: '', includeIds: [], skill: '', signOff: '', signOffAliases: [], documents: [], ...(state.project.report || {}) };
+}
+
+const HYGIENE_FIELDS = new Set(['alreadyReported', 'alreadyReportedRef', 'foldedInto', 'verification', 'priority', 'stage']);
+function substantiveUpdatedAt(f) {
+  if (!f?._f || !Object.keys(f._f).length) return f?.updatedAt || 0;
+  const times = Object.entries(f._f).filter(([k]) => !HYGIENE_FIELDS.has(k)).map(([, v]) => v?.at || 0);
+  return times.length ? Math.max(...times) : (f.createdAt || 0);
 }
 
 // Why a finding is or is not in the report.
 export function reportability(state, f) {
   const reasons = [];
+  if (f.foldedInto && state.items.finding[f.foldedInto]) {
+    reasons.push(`folded into ${f.foldedInto} "${state.items.finding[f.foldedInto].title}"`);
+    return reasons;
+  }
   for (const g of cardGaps(f)) reasons.push(`card: ${g.field} missing`);
   for (const g of evidenceGaps(f)) reasons.push(`evidence: needs ${g}`);
   const sev = severityProblem(f);
@@ -51,10 +62,18 @@ export function buildReport(state) {
   const shape = cfg.shape || 'combined';
   const expected = expectedDocuments(state, shape, included);
   const docs = (cfg.documents || []).filter((d) => d.shape === shape);
-  const changedAt = (ids) => Math.max(0, ...ids.map((id) => state.items.finding[id]?.updatedAt || 0));
+  const changedAt = (ids) => Math.max(0, ...ids.map((id) => substantiveUpdatedAt(state.items.finding[id])));
   const documents = expected.map((e) => {
     const d = docs.find((x) => x.key === e.key);
-    return { ...e, written: Boolean(d), stale: Boolean(d && d.at < changedAt(e.findingIds)), ...(d ? { body: d.body, fields: d.fields, at: d.at, by: d.by, skill: d.skill } : {}) };
+    return {
+      ...e,
+      written: Boolean(d),
+      stale: Boolean(d && d.at < changedAt(e.findingIds)),
+      ...(d ? {
+        body: d.body, appendix: d.appendix || '', fields: d.fields, at: d.at, by: d.by, skill: d.skill,
+        disclosureState: d.disclosureState || 'draft', sentAt: d.sentAt || null, acknowledgedAt: d.acknowledgedAt || null,
+      } : {}),
+    };
   });
   return {
     config: { ...cfg, documents: undefined },
@@ -107,8 +126,11 @@ export function reportBrief(state, skill) {
       trigger: hyp?.trigger || '',
       reproduction: f.repro || '',
       suggestedFix: f.fix || '',
-      evidence: (f.evidence || []).map((e) => ({ kind: e.kind, ref: e.ref, note: e.note || '', block: e.block || '', rpc: e.rpc ? 'yes' : '' })),
+      evidence: (f.evidence || []).map((e) => ({ kind: e.kind, ref: e.ref, note: e.note || '', block: e.block || '', rpc: e.rpc ? 'yes' : '', ...(e.command ? { command: e.command } : {}), ...(e.env?.length ? { env: e.env } : {}) })),
       chains: chains.map((c) => ({ title: c.title, severity: c.severity, result: c.result, attackerControlsTheGlue: Boolean(c.gluePermissionless) })),
+      foldedFindings: Object.values(items.finding).filter((x) => x.foldedInto === f.id).map((x) => ({
+        id: x.id, title: x.title, severity: x.severity, notes: x.notes || '', evidence: (x.evidence || []).map((e) => ({ kind: e.kind, ref: e.ref, note: e.note || '' })),
+      })),
     };
   };
 
@@ -128,13 +150,16 @@ export function reportBrief(state, skill) {
     ...Object.values(items.assumption).filter((a) => a.state === 'assumed' && a.origin === 'developer').map((a) => `Developer assumption not checked: ${a.text}`),
   ];
 
+  const signOffDisplay = typeof cfg.signOff === 'object' && cfg.signOff ? (cfg.signOff.name || '') : (cfg.signOff || '');
   const facts = {
     project: state.project.name,
     date: new Date().toISOString().slice(0, 10),
-    signOffName: cfg.signOff || '',
+    signOffName: signOffDisplay,
+    signOffAliases: signOffTokens(cfg.signOff, cfg.signOffAliases),
     targets: targets.map((t) => ({
       name: t.name, chain: t.chain || '', protocolType: t.protocolType, inScope: t.inScope || t.scope || '', outOfScope: t.outOfScope || '',
-      disclosureChannel: t.disclosureChannel || '', severityScale: t.severityScale || '', bountyRules: t.bountyRules || '',
+      disclosureChannel: t.disclosureChannel || '', securityContact: t.securityContact || '', severityScale: t.severityScale || '', bountyRules: t.bountyRules || '',
+      ...(t.repoUrl ? { repoUrl: t.repoUrl } : {}), ...(t.commit ? { commit: t.commit } : {}),
     })),
     findings: included.map(findingFacts),
     leftOut: r.excluded,
@@ -172,10 +197,39 @@ const BANNED_PHRASES = [
   [/potentially catastrophic|critical infrastructure risk/i, 'replace vague intensifiers with the specific, bounded impact'],
 ];
 
-// Returns a list of problems; empty means it reads as the skill asks.
-export function lintProse(text, { signOff = '', label = 'the report', needSeverity = true } = {}) {
-  const problems = [];
+// Extract accepted sign-off tokens from a string ("alice (Alice)") or { name, aliases } + extra aliases.
+export function signOffTokens(signOff, aliases = []) {
+  const display = typeof signOff === 'object' && signOff ? String(signOff.name || '') : String(signOff || '');
+  const extra = [
+    ...(typeof signOff === 'object' && Array.isArray(signOff?.aliases) ? signOff.aliases : []),
+    ...(Array.isArray(aliases) ? aliases : []),
+  ];
+  const out = new Set();
+  const addFrom = (s) => {
+    const clean = String(s || '').trim();
+    if (!clean) return;
+    out.add(clean.toLowerCase());
+    for (const part of clean.split(/[\s(),/]+/).filter((w) => w.length >= 2)) out.add(part.toLowerCase());
+  };
+  addFrom(display);
+  for (const a of extra) addFrom(a);
+  return [...out];
+}
+
+const APPENDIX_RE = /^\s*-{3,}\s*(?:code\s+)?(?:appendix|proof of concept|poc)\b[^\n]*$/im;
+
+export function splitProseAndAppendix(text) {
   const s = String(text || '');
+  const m = APPENDIX_RE.exec(s);
+  if (!m) return { prose: s, appendix: '' };
+  return { prose: s.slice(0, m.index).trimEnd(), appendix: s.slice(m.index).trim() };
+}
+
+// Returns a list of problems; empty means it reads as the skill asks.
+export function lintProse(text, { signOff = '', signOffAliases = [], label = 'the report', needSeverity = true } = {}) {
+  const problems = [];
+  const { prose } = splitProseAndAppendix(text);
+  const s = String(prose || '');
   if (!s.trim()) return [`${label} is empty`];
   const lines = s.split('\n');
   const where = (i) => `line ${i + 1}: "${lines[i].trim().slice(0, 50)}"`;
@@ -187,7 +241,7 @@ export function lintProse(text, { signOff = '', label = 'the report', needSeveri
   });
   if (/\*\*[^*\n]+\*\*|(^|[\s(])__[^_\n]+__(?=[\s.,;:)]|$)/m.test(s)) problems.push(`${label}: bold markup (** or __); remove it`);
   if (/(^|[\s(])\*[^*\s][^*\n]*[^*\s]\*(?=[\s.,;:)]|$)/m.test(s) || /(^|[\s(])_[^_\s][^_\n]*[^_\s]_(?=[\s.,;:)]|$)/m.test(s)) problems.push(`${label}: italic markup (*text* or _text_); remove it`);
-  if (/`/.test(s)) problems.push(`${label}: backticks; write names like withdraw() as plain text`);
+  if (/`/.test(s)) problems.push(`${label}: backticks; write names like withdraw() as plain text (or put proof-of-concept code in the appendix field or after a "--- APPENDIX ---" line)`);
   if (/\[[^\]\n]+\]\([^)\s]+\)/.test(s)) problems.push(`${label}: a markdown link; write the URL out in the sentence`);
   for (const [re, msg] of BANNED_PHRASES) if (re.test(s)) problems.push(`${label}: ${msg}`);
   if (needSeverity) {
@@ -196,9 +250,15 @@ export function lintProse(text, { signOff = '', label = 'the report', needSeveri
       problems.push(`${label}: give your honest severity in the first two or three sentences`);
     }
   }
-  if (signOff) {
-    const first = signOff.trim().split(/\s+/)[0].toLowerCase();
-    if (!s.slice(-400).toLowerCase().includes(first)) problems.push(`${label}: sign off by name (${signOff}) at the end`);
+  const display = typeof signOff === 'object' && signOff ? String(signOff.name || '') : String(signOff || '');
+  const tokens = signOffTokens(signOff, signOffAliases);
+  if (tokens.length) {
+    const paras = s.trim().split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+    const tail = paras[paras.length - 1] || s.slice(-400);
+    const low = tail.toLowerCase();
+    if (!tokens.some((tok) => low.includes(tok))) {
+      problems.push(`${label}: sign off by name (${display || tokens[0]}) at the end - looked for ${tokens.slice(0, 4).join(' or ')} in the last prose paragraph (${tail.length} chars)`);
+    }
   }
   return problems;
 }
@@ -234,15 +294,46 @@ export function checkSubmission(state, documents) {
     }
     let fields = null;
     let body = '';
+    const appendix = typeof doc.appendix === 'string' ? doc.appendix.replace(/\r\n/g, '\n').trim() : '';
     if (Array.isArray(doc.fields) && doc.fields.length) {
       fields = doc.fields.map((f) => ({ label: String(f?.label || '').trim(), value: String(f?.value || '').trim() })).filter((f) => f.label);
       for (const f of fields) problems.push(...lintProse(f.value, { label: `${label}, field "${f.label}"`, needSeverity: false }));
       body = fields.map((f) => `${f.label}\n\n${f.value}`).join('\n\n\n');
     } else {
       body = String(doc.body || '').replace(/\r\n/g, '\n').trim();
-      problems.push(...lintProse(body, { label, signOff: cfg.signOff }));
+      problems.push(...lintProse(body, { label, signOff: cfg.signOff, signOffAliases: cfg.signOffAliases }));
     }
-    out.push({ key, shape: r.shape, name: want.name, findingIds: want.findingIds, body, fields });
+    out.push({ key, shape: r.shape, name: want.name, findingIds: want.findingIds, body, appendix, fields, disclosureState: 'draft' });
   });
   return { docs: out, problems };
+}
+
+// Prepare a human-ready disclosure handoff after a report is saved. Recon never sends it automatically.
+export function buildHandoff(state, docs = []) {
+  const targets = Object.values(state.items.target || {});
+  const primary = targets[0] || null;
+  const emailMatch = (s) => String(s || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || '';
+  const to = primary?.securityContact?.trim() || emailMatch(primary?.disclosureChannel) || primary?.disclosureChannel?.trim() || '';
+  const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to);
+  return docs.map((d) => {
+    const firstFinding = state.items.finding?.[d.findingIds?.[0]];
+    const subject = d.shape === 'separate' && firstFinding
+      ? `Security disclosure: ${primary?.name || state.project.name} - ${firstFinding.title}`
+      : `Security disclosure: ${primary?.name || state.project.name} (${(d.findingIds || []).length} finding${(d.findingIds || []).length === 1 ? '' : 's'})`;
+    const fullBody = d.appendix ? `${d.body}\n\n--- APPENDIX ---\n\n${d.appendix}` : d.body;
+    const mailto = isEmail ? `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(fullBody.slice(0, 1800))}` : null;
+    return {
+      key: d.key,
+      name: d.name,
+      to,
+      channel: primary?.disclosureChannel || to || '',
+      subject,
+      body: fullBody,
+      mailto,
+      disclosureState: d.disclosureState || 'draft',
+      nextSteps: to
+        ? `Review the saved report and send it to ${to} yourself (recon never sends disclosures automatically). Then mark it "sent" in the Report panel.`
+        : 'Set securityContact or disclosureChannel on the target, review the saved report, send it yourself, and mark it "sent" in the Report panel.',
+    };
+  });
 }

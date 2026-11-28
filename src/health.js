@@ -13,20 +13,25 @@ export function agentHealth(state, agent, now = Date.now()) {
   const lastWrite = agent.lastWriteAt || agent.createdAt || 0;
   const since = now - lastSeen;
   let status = agent.status;
+  let presence = status;
 
+  const hasWebhook = agent.wake?.via === 'webhook';
+  const webhookFailing = hasWebhook && (agent.wake.lastStatus === 'failing' || (agent.wake.failCount || 0) >= 3);
   const listening = Boolean(agent.waitingSince && since < 60_000);
-  if (listening) { status = 'active'; flags.push('listening'); }
-  else if (agent.transport === 'json') status = since > OFFLINE_AFTER ? 'idle' : 'active';
-  else if (since > OFFLINE_AFTER) status = 'offline';
-  else if (agent.status === 'stuck') status = 'stuck';
-  else if (since > IDLE_AFTER) status = 'idle';
-  else if (now - lastWrite > STUCK_AFTER) { status = 'stuck'; flags.push('no-output'); }
-  else status = 'active';
+  if (listening) { status = 'active'; presence = 'listening'; flags.push('listening'); }
+  else if (webhookFailing) { status = since > IDLE_AFTER ? 'stuck' : 'active'; presence = 'webhook-failing'; flags.push('webhook-failing'); }
+  else if (hasWebhook && since > IDLE_AFTER) { status = 'idle'; presence = 'asleep-webhook'; flags.push('asleep-webhook'); }
+  else if (agent.transport === 'json') { status = since > OFFLINE_AFTER ? 'idle' : 'active'; presence = status; }
+  else if (since > OFFLINE_AFTER) { status = 'offline'; presence = 'offline'; }
+  else if (agent.status === 'stuck') { status = 'stuck'; presence = 'stuck'; }
+  else if (since > IDLE_AFTER) { status = 'idle'; presence = 'idle'; }
+  else if (now - lastWrite > STUCK_AFTER) { status = 'stuck'; presence = 'stuck'; flags.push('no-output'); }
+  else { status = 'active'; presence = 'active'; }
 
-  // idle while the human is waiting on it is not idle, it is stuck
+  // idle while the human is waiting on it is not idle, it is stuck (unless it wakes via healthy webhook)
   const waiting = openSteersFor(state, agent.id).filter((st) => now - st.createdAt > 5 * 60_000);
-  if (waiting.length && (status === 'idle' || status === 'active')) { flags.push('ignoring-steers'); if (status === 'idle') status = 'stuck'; }
-  if (status === 'idle') flags.push('idle');
+  if (waiting.length && (status === 'idle' || status === 'active') && presence !== 'asleep-webhook') { flags.push('ignoring-steers'); if (status === 'idle') status = 'stuck'; }
+  if (status === 'idle' && presence !== 'asleep-webhook') flags.push('idle');
   if (status === 'offline') flags.push('offline');
 
   const recent = state.activity.filter((a) => a.by === agent.id).slice(-10);
@@ -44,7 +49,7 @@ export function agentHealth(state, agent, now = Date.now()) {
   if (disputed >= 3) flags.push('disputed');
 
   const writes = state.activity.filter((a) => a.by === agent.id && now - a.at < 10 * 60_000).length;
-  return { status, flags, lastSeen, lastWriteAt: lastWrite, writes10m: writes };
+  return { status, presence, flags, lastSeen, lastWriteAt: lastWrite, writes10m: writes, ...(hasWebhook ? { wake: agent.wake } : {}) };
 }
 
 export function healthAll(state, now = Date.now()) {

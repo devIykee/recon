@@ -27,20 +27,34 @@ const quote = (s) => (/^[\w./:@=+~-]+$/.test(s) ? s : JSON.stringify(s));
 
 // ---------- recon agent ----------
 
+async function withProgress(err, label, fn, slowMs = 10_000) {
+  err.write(`recon: ${label}...\n`);
+  const t = setTimeout(() => err.write(`recon: still working on ${label} (>${Math.round(slowMs / 1000)}s)...\n`), slowMs);
+  t.unref?.();
+  try { return await fn(); } finally { clearTimeout(t); }
+}
+
 export async function runAgent({ name, url, key, hunt = undefined, out = process.stdout, err = process.stderr }) {
   const { bin, shim } = installCopy();
-  const hub = await ensureHub({ url: url || defaultUrl(), key, bin, log: (m) => err.write(`${m}\n`) });
+  const targetUrl = url || defaultUrl();
+  const hub = await withProgress(err, `connecting to hub (${targetUrl})`, () => ensureHub({ url: targetUrl, key, bin, log: (m) => err.write(`${m}\n`) }));
   const who = name || '<your-name>';
   // a hosted board needs the url and the api key on every command
   const env = `${hub.url !== defaultUrl({}) ? `RECON_URL=${hub.url} ` : ''}${key && hub.url !== defaultUrl({}) ? `RECON_KEY=${key} ` : ''}`;
   // Different projects get different hunts: name it after the project this agent is working in.
   const huntName = hunt === undefined ? projectName(process.cwd()) : hunt;
   let started = null;
-  if (huntName) { try { started = await createClient({ url: hub.url, key, agent: name || null, transport: 'cli' }).start(huntName); } catch (e) { err.write(`recon: could not open the hunt "${huntName}": ${e.message}\n`); } }
+  if (huntName) {
+    try {
+      started = await withProgress(err, `opening hunt "${huntName}"`, () => createClient({ url: hub.url, key, agent: name || null, transport: 'cli' }).start(huntName));
+    } catch (e) { err.write(`recon: could not open the hunt "${huntName}": ${e.message}\n`); }
+  }
   const huntFlag = started ? ` --hunt ${quote(started.hunt?.name || huntName)}` : '';
   const R = `${env}${quote(tilde(shim))} --as ${who}${huntFlag}`;
   let state = null;
-  try { state = await createClient({ url: hub.url, key, hunt: started ? (started.hunt?.name || huntName) : null }).state(); } catch { /* board still fine */ }
+  try {
+    state = await withProgress(err, 'loading board state', () => createClient({ url: hub.url, key, hunt: started ? (started.hunt?.name || huntName) : null }).state());
+  } catch { /* board still fine */ }
   const lines = [
     `recon is ready. Tell the human: the live board is at ${hub.url} (open it to watch, verify and steer).`,
     started ? `This project's hunt is "${started.hunt?.name || huntName}"${started.resumed || started.existing ? ' (resumed: call briefing to see where you left off)' : ''}${started.onScreen === false ? '. The human is looking at another hunt; the board offers them a switch.' : '.'}` : '',

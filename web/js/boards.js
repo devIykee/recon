@@ -411,6 +411,9 @@ export function createBoards(root) {
     const finds = list('finding', (x) => x.createdBy === a.id);
     const steers = list('steer', (s) => s.state !== 'addressed' && ((s.to || []).includes(a.id) || (s.to || []).includes('all')));
     const flagInfo = {
+      listening: ['good', 'Listening', 'In recon_wait right now - receives steers immediately.'],
+      'asleep-webhook': ['good', 'Wakes on webhook', `Asleep, wakes via webhook (${a.wake?.host || 'configured'}).`],
+      'webhook-failing': ['', 'Webhook failing', `Last webhook deliveries failed (${a.wake?.failCount || 0} errors). Click More → Webhook to inspect.`],
       idle: ['soft', 'Idle', 'No activity for a bit. It may be thinking, or it may need a nudge.'],
       offline: ['soft', 'Offline', 'Has not checked in for 10+ minutes.'],
       'no-output': ['', 'Stuck?', 'Connected, but no writes for several minutes.'],
@@ -431,6 +434,7 @@ export function createBoards(root) {
               click: (e) => menu(e.currentTarget, [
                 { text: 'Show on map', icon: 'map', action: () => { bus.view('map'); setTimeout(() => bus.focusAgent?.(a.id), 50); } },
                 { text: 'Assign targets…', icon: 'target', action: () => assignDialog(a) },
+                { text: 'Wake webhook…', icon: 'zap', action: () => webhookDialog(a) },
                 '-',
                 { text: 'Remove agent', icon: 'trash', danger: true, action: async () => { try { await write.remove('agent', a.id); } catch (err) { toast(err.message, 'error'); } } },
               ], { align: 'end' }),
@@ -466,6 +470,74 @@ export function createBoards(root) {
       h('div.modal-actions', h('button.btn', { on: { click: () => m.close() } }, 'Cancel'),
         h('button.btn.btn-primary', { on: { click: async () => { try { await patch(`/api/items/agent/${a.id}`, { assignment: [...sel] }); m.close(); toast('Assignment saved.', 'ok'); } catch (err) { toast(err.message, 'error'); } } } }, 'Save')),
     ]);
+  }
+
+  async function webhookDialog(a) {
+    const { modal, codeBlock } = await import('./ui.js');
+    const { get, post, api, del } = await import('./state.js');
+    let cur = null;
+    let deliveries = [];
+    let shownSecret = null;
+    const m = modal([h('div.empty', h('span.spinner'))], { wide: true });
+    const load = async () => {
+      cur = await get(`/api/agents/${encodeURIComponent(a.id)}/webhook`).catch(() => null);
+      deliveries = cur ? await get(`/api/agents/${encodeURIComponent(a.id)}/webhook/deliveries?limit=10`).catch(() => []) : [];
+      renderWh();
+    };
+    const renderWh = () => {
+      const cfg = cur?.config || {};
+      const urlIn = h('input.input.mono', { value: cfg.url || '', placeholder: 'https://your-routine-webhook-url' });
+      const authSel = h('select.input',
+        h('option', { value: 'hmac', selected: (cfg.auth || 'hmac') === 'hmac' }, 'HMAC-SHA256 (Recon-Signature)'),
+        h('option', { value: 'bearer', selected: cfg.auth === 'bearer' }, 'Bearer token + HMAC'));
+      const tokenIn = h('input.input.mono', { value: '', placeholder: 'Optional sender key (for bearer mode)' });
+      const save = async () => {
+        try {
+          const r = await api('PUT', `/api/agents/${encodeURIComponent(a.id)}/webhook`, {
+            url: urlIn.value.trim(),
+            auth: authSel.value,
+            ...(authSel.value === 'bearer' && tokenIn.value.trim() ? { secret: tokenIn.value.trim() } : {}),
+          });
+          shownSecret = r.secret;
+          toast('Webhook saved.', 'ok');
+          await load();
+        } catch (err) { toast(err.message, 'error'); }
+      };
+      const sendTest = async () => {
+        try {
+          const r = await post(`/api/agents/${encodeURIComponent(a.id)}/webhook/test`, {});
+          toast(r.status === 'delivered' ? `Test delivered (HTTP ${r.httpStatus}).` : `Test ${r.status}: ${r.error || ''}`, r.status === 'delivered' ? 'ok' : 'error');
+          await load();
+        } catch (err) { toast(err.message, 'error'); }
+      };
+      const remove = async () => {
+        try {
+          await del(`/api/agents/${encodeURIComponent(a.id)}/webhook`);
+          shownSecret = null;
+          toast('Webhook removed.', 'ok');
+          await load();
+        } catch (err) { toast(err.message, 'error'); }
+      };
+      m.set(
+        h('h2', `Wake webhook for ${a.name}`),
+        h('p.lead', 'When this agent is asleep (not in recon_wait), recon POSTs signed steer and proposal-decision events to this HTTPS URL so a routine can wake it automatically.'),
+        h('div.field', h('label', 'Webhook URL (HTTPS only)'), urlIn),
+        h('div.field', h('label', 'Auth mode'), authSel),
+        h('div.field', h('label', 'Bearer sender key (only for Bearer mode)'), tokenIn),
+        shownSecret ? h('div.field', h('label', 'Signing secret (shown once)'), codeBlock(shownSecret)) : null,
+        deliveries.length ? h('div.field', h('label', 'Recent deliveries'),
+          h('div.recent', ...deliveries.map((d) => h('div.r',
+            h('span.t', timeEl(d.createdAt)),
+            h('span', `${d.type} · ${d.status}${d.httpStatus ? ` (${d.httpStatus})` : ''}${d.error ? ` - ${d.error}` : ''}`))))) : null,
+        h('div.modal-actions',
+          cur ? h('button.btn.btn-danger', { on: { click: remove } }, 'Remove') : null,
+          cur ? h('button.btn', { on: { click: sendTest } }, icon('send'), 'Send test') : null,
+          h('span.spacer'),
+          h('button.btn', { on: { click: () => m.close() } }, 'Close'),
+          h('button.btn.btn-primary', { on: { click: save } }, 'Save webhook')),
+      );
+    };
+    await load();
   }
 
   return {

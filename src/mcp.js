@@ -28,6 +28,8 @@ const evidenceSchema = {
       rpc: { type: 'string', description: 'fork evidence: which network/rpc' },
       block: { type: 'string', description: 'fork evidence: block number' },
       result: { type: 'string', description: 'test or fork result, e.g. "pass"' },
+      command: { type: 'string', description: 'exact command to rerun the proof, e.g. "forge test --match-test test_X --fork-url $ETH_RPC_URL"' },
+      env: { type: 'array', items: { type: 'string' }, description: 'environment variable names needed to rerun, e.g. ["ETH_RPC_URL", "FORK_BLOCK"]' },
     },
     required: ['ref'],
   },
@@ -283,28 +285,53 @@ Rules of the board:
     },
   },
   {
+    name: 'recon_remove_evidence',
+    description: 'Remove a malformed or outdated evidence entry by its evidenceId from an item.',
+    inputSchema: {
+      type: 'object',
+      properties: { ref: str('Item id or name'), evidenceId: str('Evidence id (ev_...) from recon_get') },
+      required: ['ref', 'evidenceId'],
+    },
+    run: async (c, a) => {
+      const { kind, item } = await c.resolve(a.ref);
+      const out = await c.removeEvidence(kind, item.id, a.evidenceId);
+      return { id: out.id, evidence: out.evidence.length };
+    },
+  },
+  {
     name: 'recon_steer',
-    description: 'Respond to a human steer. Acknowledge as soon as you see it (state=acknowledged), then mark it addressed with a short response when done. Steers never require you to stop current work.',
+    description: 'Respond to a human steer. Acknowledge as soon as you see it (state=acknowledged for the one you are actively working, or state=queued for others in a batch so they do not lock out other writes). Mark state=waiting-on-human when the next action belongs to the human, or state=addressed with a short response when done.',
     inputSchema: {
       type: 'object',
       properties: {
         steerId: str('The steer id from recon_briefing'),
-        state: { type: 'string', enum: ['acknowledged', 'addressed'] },
-        response: str('What you did or found, in a sentence or two'),
+        state: { type: 'string', enum: ['queued', 'acknowledged', 'waiting-on-human', 'addressed'] },
+        response: str('What you did or found, or (for waiting-on-human) what the human needs to do next'),
       },
       required: ['steerId', 'state'],
     },
-    run: async (c, a) => compact(await c.steer(a.steerId, a.state === 'addressed' ? 'address' : 'ack', a.response)),
+    run: async (c, a) => {
+      let id = String(a.steerId || '').trim();
+      try {
+        const resolved = await c.resolve(id, 'steer');
+        if (resolved?.item?.id) id = resolved.item.id;
+      } catch (err) {
+        if (err.status !== 404) throw err;
+      }
+      const verb = { addressed: 'address', queued: 'queue', 'waiting-on-human': 'wait-human', acknowledged: 'ack' }[a.state] || 'ack';
+      return compact(await c.steer(id, verb, a.response));
+    },
   },
   {
     name: 'recon_propose',
-    description: 'Propose your next move to the human instead of going idle, going rogue, or asking in chat. Give options when there is a real choice; the human picks one with a click. Accepted proposals come back as acknowledged steers in recon_briefing.',
+    description: 'Propose your next move to the human instead of going idle, going rogue, or asking in chat. Give options when there is a real choice; the human picks one with a click. Optionally pass onAccept (e.g. { report: { shape: "combined" } }) to apply a report setting automatically on accept.',
     inputSchema: {
       type: 'object',
       properties: {
         text: str('What you want to do next'), rationale: str('Why it is worth it'),
         itemId: str('The item it concerns, if any'), steerKind: en('steerKind', 'The kind of work it is'),
         options: { type: 'array', items: { type: 'string' }, description: 'Choices for the human to pick from with one click, e.g. ["Send the combined report", "Split: High first, then Mediums", "Keep hunting TVL first"]' },
+        onAccept: { type: 'object', description: 'Optional state mutation applied automatically when the human accepts (e.g. { report: { shape: "combined", signOff: "alice (Alice)" } })' },
       },
       required: ['text'],
     },
@@ -312,6 +339,26 @@ Rules of the board:
       const fields = { ...a };
       if (a.itemId) { const r = await c.resolve(a.itemId); fields.itemId = r.item.id; fields.itemKind = r.kind; }
       return compact(await c.create('proposal', fields));
+    },
+  },
+  {
+    name: 'recon_webhook_status',
+    description: 'Check whether your outbound wake webhook is registered and healthy, and inspect recent delivery status (never returns secrets).',
+    inputSchema: {
+      type: 'object',
+      properties: { agentId: str('Optional agent id; defaults to your own agent id') },
+    },
+    run: async (c, a) => {
+      let id = a.agentId;
+      if (!id) {
+        const b = await c.briefing();
+        id = b.you?.id;
+      }
+      if (!id) return { configured: false };
+      const status = await c.webhookStatus(id).catch(() => null);
+      if (!status) return { agentId: id, configured: false };
+      const deliveries = await c.webhookDeliveries(id, 5).catch(() => []);
+      return { agentId: id, configured: true, ...status, deliveries };
     },
   },
   {
@@ -393,6 +440,7 @@ Rules of the board:
             properties: {
               findingIds: { type: 'array', items: { type: 'string' }, description: 'The findings this document covers (from the brief)' },
               body: str('The report, plain prose'),
+              appendix: str('Optional proof-of-concept code or technical appendix (exempt from plain-prose markdown rules)'),
               fields: { type: 'array', items: { type: 'object', properties: { label: str('e.g. Title, Summary, Details, Proof of Concept, Impact, Affected products, Severity, CWE'), value: str() }, required: ['label', 'value'] }, description: 'Instead of body, for channels that use form fields' },
             },
             required: ['findingIds'],
@@ -404,7 +452,7 @@ Rules of the board:
     run: async (c, a, ctx = {}) => {
       const r = await c.submitReport(a.documents);
       const where = r.config.path;
-      const summary = { written: r.written, stillMissing: r.missing, stale: r.stale };
+      const summary = { written: r.written, stillMissing: r.missing, stale: r.stale, handoff: r.handoff };
       if (!ctx.canWriteFiles || !where) return { ...summary, note: where ? 'Saved on the board. This connection cannot write files; the human can download them from the Report window.' : 'Saved on the board. No report path is set; the human can download it from the Report window.' };
       const base = path.resolve(ctx.cwd || process.cwd(), where);
       const files = [];

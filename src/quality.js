@@ -28,16 +28,25 @@ export function openSteersFor(state, agentId) {
 export const STEER_WINDOW_MS = 10 * 60_000;
 export const STEER_WINDOW_WRITES = 6;
 
-// Steers this agent acknowledged and has not reported back on. A steer to "all"
+// Steers this agent acknowledged (actively working) and has not reported back on. A steer to "all"
 // belongs to whoever acknowledged it.
 export function ackedSteersFor(state, agentId) {
   return Object.values(state.items.steer).filter((s) => s.state === 'acknowledged'
     && ((s.to || []).includes(agentId) || ((s.to || []).includes('all') && (s._f?.state?.by || s.lastTouchedBy) === agentId)));
 }
 
-// The last time the agent said anything about the steer: the ack, or a message replying to it.
+// Steers this agent acknowledged into its queue (seen, waiting their turn; no lockout clock yet).
+export function queuedSteersFor(state, agentId) {
+  return Object.values(state.items.steer).filter((s) => s.state === 'queued'
+    && ((s.to || []).includes(agentId) || ((s.to || []).includes('all') && (s._f?.state?.by || s.lastTouchedBy) === agentId)));
+}
+
+// The last time the agent said anything about the steer: the ack, a message replying to it,
+// or a message that explicitly mentions its id (so one queue update can refresh several steers).
 export function lastProgressOn(state, s, agentId) {
-  const replies = Object.values(state.items.message || {}).filter((m) => m.replyTo === s.id && m.createdBy === agentId).map((m) => m.createdAt);
+  const replies = Object.values(state.items.message || {})
+    .filter((m) => m.createdBy === agentId && (m.replyTo === s.id || String(m.text || '').includes(s.id)))
+    .map((m) => m.createdAt);
   return Math.max(s.ackAt || s.updatedAt, ...replies);
 }
 
@@ -75,10 +84,13 @@ export function cardGaps(f) {
 }
 
 export function evidenceGaps(item) {
-  const kinds = new Set((item.evidence || []).map((e) => e.kind));
+  const list = item.evidence || [];
+  const kinds = new Set(list.map((e) => e.kind));
+  const seen = list.length ? `you attached ${list.length} item(s): ${list.map((e) => e.kind).join(', ')}; ` : '';
+  const id = item.id || '<id>';
   const gaps = [];
-  if (!kinds.has('code')) gaps.push('a code reference (file:line or function)');
-  if (!['test', 'fork', 'tx'].some((k) => kinds.has(k))) gaps.push('a test, fork run or transaction that demonstrates it');
+  if (!kinds.has('code')) gaps.push(`${seen}a code reference (file:line or function) is still missing. Fix: recon evidence ${id} "code:path/Contract.sol:10|what it shows" (or recon_evidence with kind="code")`);
+  if (!['test', 'fork', 'tx'].some((k) => kinds.has(k))) gaps.push(`${seen}a test, fork run or transaction is still missing. Fix: recon evidence ${id} "fork:<test or ref>|what it shows" (or recon_evidence with kind="test"|"fork"|"tx")`);
   return gaps;
 }
 
@@ -151,7 +163,8 @@ export function enforce(state, kind, next, changed, author, { created = false } 
   const ignored = steersBeingIgnored(state, author).filter((s) => !aboutSteer(s, kind, next) && !(changed.length === 1 && changed[0] === 'evidence'));
   if (ignored.length) {
     const s = ignored[0];
-    throw new GateError(`you acknowledged steer ${s.id} and have not reported back on it. The human asked: "${s.note || s.action}"${s.itemId ? ` (about ${s.itemId})` : ''}.\nDo that now. When it is done, or if you will not do it, say so: recon_steer id=${s.id} state=addressed response="what you found or why not". To keep going on it, post progress with recon_say replyTo=${s.id}. Other work is refused until then.`, 'steer-ignored');
+    const extra = ignored.length > 1 ? ` (${ignored.length} steers overdue: ${ignored.slice(0, 5).map((x) => x.id).join(', ')})` : '';
+    throw new GateError(`you acknowledged steer ${s.id} and have not reported back on it${extra}. The human asked: "${s.note || s.action}"${s.itemId ? ` (about ${s.itemId})` : ''}.\nDo that now. When done: recon_steer steerId=${s.id} state=addressed response="what you found". If blocked on the human: recon_steer steerId=${s.id} state=waiting-on-human response="what you need". If working another steer first: recon_steer steerId=${s.id} state=queued, or post progress with recon_say replyTo=${s.id}. Other work is refused until then.`, 'steer-ignored');
   }
 
   // A rule result has to say how it was reached: "holds" is only as good as the search behind it.

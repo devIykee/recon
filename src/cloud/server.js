@@ -28,7 +28,7 @@ const security = (extra = {}) => ({
   ...extra,
 });
 
-export function createCloud({ db, secret, origin = null, root = path.join('/tmp', 'recon-cloud'), log = (...a) => console.error(...a) }) {
+export function createCloud({ db, secret, origin = null, root = path.join('/tmp', 'recon-cloud'), log = (...a) => console.error(...a), fetch: fetchImpl, webhookAllowLocal = false, waitUntil = null, cronSecret = process.env.CRON_SECRET || '' }) {
   const auth = createAuth({ db, secret, origin });
   const spaces = new Workspaces({ db, root });
   const token = crypto.randomBytes(24).toString('hex'); // marks requests this layer authenticated
@@ -48,6 +48,10 @@ export function createCloud({ db, secret, origin = null, root = path.join('/tmp'
 
   const hub = createHub({
     mode: 'multi', dataDir: root, hosted: true, realtime: 'poll', snapshots: false, demo: false, seed: 'empty', log,
+    webhookStore: db,
+    webhookFetch: fetchImpl,
+    webhookAllowLocal,
+    waitUntil,
     authenticate: (req) => {
       const [t, tenant] = String(req.headers['x-recon-cloud'] || '').split(' ');
       if (!t || t.length !== token.length || !crypto.timingSafeEqual(Buffer.from(t), Buffer.from(token)) || !tenant) throw new AuthError(401, 'sign in at /login, or send an api key as a bearer token');
@@ -180,6 +184,17 @@ export function createCloud({ db, secret, origin = null, root = path.join('/tmp'
       }
 
       if (p === '/ws') return sendJson(res, 404, { error: 'hosted recon updates by polling; reload the page' });
+
+      if (p === '/api/internal/webhooks/retry' && (req.method === 'POST' || req.method === 'GET')) {
+        const expected = cronSecret || secret;
+        const authz = String(req.headers.authorization || '');
+        const provided = authz.startsWith('Bearer ') ? authz.slice(7).trim() : '';
+        if (!provided || !expected || provided.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected))) {
+          return sendJson(res, 401, { error: 'unauthorized' });
+        }
+        const out = await hub.webhooks.retryDue();
+        return sendJson(res, 200, out);
+      }
 
       if (p.startsWith('/api/') || p === '/mcp') {
         if (p === '/api/health') {
